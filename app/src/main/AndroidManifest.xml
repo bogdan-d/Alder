@@ -19,9 +19,12 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/logo"
         android:theme="@style/Alder"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="false">
         <!-- Plain http:// as Stremio allows it: self-hosted add-ons (http://192.168.…:7000), debrid proxies and IPTV
              links. Android 9+ blocks it otherwise, and every such add-on and stream failed. -->
+        <!-- Back as a key press on Android 16 too: the player and its panels read KEYCODE_BACK, which Android 16 stops
+             sending to apps that target it, so Back left the player with the controls or a panel up. -->
 
         <activity
             android:name=".ProfilesActivity"
