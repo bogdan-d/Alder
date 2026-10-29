@@ -50,18 +50,23 @@ object Settings {
     /**
      * What the viewer picked in the player's Audio & subtitles for one title (a series' episodes share it), so the next
      * episode and a resume start the same way. Language codes; subtitles "" is Off; null where nothing was picked.
+     * [subtitle]: the exact subtitle picked for video [subtitleVideo] ("addon:<url>" or "file:<track id>"), as Stremio
+     * keeps it per video.
      */
-    class TitleChoice(val audio: String?, val subtitles: String?)
+    class TitleChoice(val audio: String?, val subtitles: String?, val subtitleVideo: String? = null, val subtitle: String? = null)
 
     fun titleChoice(c: Context, metaId: String): TitleChoice? = prefs(c).getString(profileKey(c, "title:$metaId"), null)
         ?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
-        ?.let { TitleChoice(it.text("audio"), if (it.has("subtitles")) it.optString("subtitles") else null) }
+        ?.let { TitleChoice(it.text("audio"), if (it.has("subtitles")) it.optString("subtitles") else null,
+            it.text("subtitleVideo"), it.text("subtitle")) }
 
-    fun pickedInPlayer(c: Context, metaId: String, audio: String? = null, subtitles: String? = null) {
+    fun pickedInPlayer(c: Context, metaId: String, audio: String? = null, subtitles: String? = null,
+                       video: String? = null, subtitle: String? = null) {
         val key = profileKey(c, "title:$metaId")
         val json = prefs(c).getString(key, null)?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } ?: org.json.JSONObject()
         audio?.let { json.put("audio", it) }
         subtitles?.let { json.put("subtitles", it) }
+        video?.let { json.put("subtitleVideo", it).put("subtitle", subtitle.orEmpty()) }
         prefs(c).edit().putString(key, json.toString()).apply()
     }
     fun alwaysList(c: Context) = prefs(c).getBoolean("alwaysList", false)

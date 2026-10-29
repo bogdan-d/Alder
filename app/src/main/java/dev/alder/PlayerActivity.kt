@@ -101,6 +101,7 @@ class PlayerActivity : Screen() {
     private var wantSub = ""
     private var subsOn = true
     private var viewerAddonSub = false // the viewer chose the addon file, over the file's own in the same language
+    private var pickedSub: String? = null // the exact subtitle picked for this video before: "addon:<url>" or "file:<track id>"
     // Timing for an addon subtitle file that runs early or late: the file is fetched, its times moved, and attached
     // from the app's cache instead of its URL. ponytail: SRT and VTT only; ASS and the file's own subtitles can't move.
     private var subDelay = 0L
@@ -150,6 +151,8 @@ class PlayerActivity : Screen() {
         wantAudio = remembered?.audio ?: Settings.audioLanguage(this)
         subsOn = remembered?.subtitles?.isNotEmpty() ?: Settings.subtitles(this)
         wantSub = remembered?.subtitles?.ifEmpty { null } ?: Settings.subtitleLanguage(this)
+        pickedSub = remembered?.takeIf { it.subtitleVideo == videoId }?.subtitle
+        if (pickedSub != null) { subsOn = true; viewerAddonSub = pickedSub!!.startsWith("addon:") }
         // Release files carry many dubs; start in the chosen language (the TV's unless Settings says) instead of the first.
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setPreferredAudioLanguage(wantAudio).setPreferredTextLanguage(wantSub).build()
@@ -309,8 +312,14 @@ class PlayerActivity : Screen() {
                     fun inFile(score: Int) = texts.filterNot(::isAddonSub).filter { Languages.match(it.getTrackFormat(0).language, wantSub) == score }
                         .maxByOrNull { it.getTrackFormat(0).selectionFlags and C.SELECTION_FLAG_FORCED == 0 } // full, not forced-only
                     val addon = texts.firstOrNull { isAddonSub(it) && Languages.same(chosenSub?.lang, wantSub) }
+                    // The same track of the file as last time, while its language still matches (another source's file
+                    // numbers its tracks its own way).
+                    val exact = pickedSub?.takeIf { it.startsWith("file:") }?.removePrefix("file:")?.let { id ->
+                        texts.firstOrNull { g -> !isAddonSub(g) && g.getTrackFormat(0).let { it.id == id &&
+                            (it.language == null || Languages.same(it.language, wantSub)) } }
+                    }
                     val pick = if (!subsOn) null
-                        else (if (viewerAddonSub) addon else null) ?: inFile(2) ?: addon ?: inFile(1)
+                        else exact ?: (if (viewerAddonSub) addon else null) ?: inFile(2) ?: addon ?: inFile(1)
                     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().apply {
                         if (pick == null) setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                         else setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setOverrideForType(TrackSelectionOverride(pick.mediaTrackGroup, 0))
@@ -352,9 +361,16 @@ class PlayerActivity : Screen() {
         }) { r ->
             addonSubs = r.getOrDefault(emptyList())
             android.util.Log.i("Alder", "addon subtitles: ${addonSubs.size}", r.exceptionOrNull())
-            if (subsAnswered) return@background // too late: playing already, offered in the list
+            val exact = addonSubs.firstOrNull { "addon:" + it.url == pickedSub }
+            if (subsAnswered) { // too late for the start: offered in the list, and the file picked last time attached now
+                if (exact != null && chosenSub == null) {
+                    chosenSub = exact
+                    if (prepared) { selectAddonSub = true; load(position()) }
+                }
+                return@background
+            }
             main.removeCallbacks(stopWaiting)
-            if (chosenSub == null) chosenSub = addonSubs.firstOrNull { Languages.same(it.lang, wantSub) } // attached, picked above
+            if (chosenSub == null) chosenSub = exact ?: addonSubs.firstOrNull { Languages.same(it.lang, wantSub) } // attached, picked above
             stopWaiting.run()
         }
         // The stream starts at once from what's known here (the intent, or the library saved on the TV) instead of
@@ -422,13 +438,15 @@ class PlayerActivity : Screen() {
     }
 
     /** A subtitle pick in the menu: the language ("" for Off) for this title's next episode and resume, and for the
-     *  next source if this one fails. A track with no language turns subtitles on without naming one. */
-    private fun remember(language: String?, addonFile: Boolean) {
+     *  next source if this one fails, and [pick] itself for this video. A track with no language turns subtitles on
+     *  without naming one. */
+    private fun remember(language: String?, addonFile: Boolean, pick: String) {
         subsOn = language != ""
         viewerAddonSub = addonFile
-        val code = if (language == "") "" else Languages.code(language) ?: return
-        if (code.isNotEmpty()) wantSub = code
-        Settings.pickedInPlayer(this, metaId, subtitles = code)
+        pickedSub = pick.ifEmpty { null }
+        val code = if (language == "") "" else Languages.code(language)
+        if (!code.isNullOrEmpty()) wantSub = code
+        Settings.pickedInPlayer(this, metaId, subtitles = code, video = videoId, subtitle = pick)
     }
 
     /** Plays the current source from [position], with its own request headers (debrid proxies need them). */
@@ -1123,7 +1141,8 @@ class PlayerActivity : Screen() {
             addonSubs.map { "${it.language}  ·  ${it.addon}" }, chosen) { i ->
             val p = player.trackSelectionParameters.buildUpon()
             val sub = addonSubs.getOrNull(i - 1 - subs.size)
-            remember(if (i == 0) "" else sub?.lang ?: subs[i - 1].getTrackFormat(0).language, addonFile = sub != null)
+            remember(if (i == 0) "" else sub?.lang ?: subs[i - 1].getTrackFormat(0).language, addonFile = sub != null,
+                pick = when { i == 0 -> ""; sub != null -> "addon:" + sub.url; else -> "file:" + subs[i - 1].getTrackFormat(0).id.orEmpty() })
             player.trackSelectionParameters = when {
                 i == 0 -> p.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
                 sub == null -> p.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
