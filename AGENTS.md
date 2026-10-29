@@ -10,7 +10,7 @@ Fork-only changes so far:
 
 - `Updates.kt`: `LATEST` points at this fork's releases. Merges from upstream must keep this line.
 - `AGENTS.md`: this file.
-- Player fixes, offered upstream on the `player-fixes` branch: the exact subtitle remembered per video (`PlayerActivity.kt`, `SettingsActivity.kt`), Back closing the controls first, and `android:enableOnBackInvokedCallback="false"` so Android 16 sends Back as a key press (`AndroidManifest.xml`). Once upstream has them, a merge brings them back as upstream code; remove them from this list.
+- Player fixes, offered upstream in [aradhyas8/Alder#40](https://github.com/aradhyas8/Alder/pull/40) (branch `player-fixes`): the exact subtitle remembered per video (`PlayerActivity.kt`, `SettingsActivity.kt`), Back closing the controls first, and `android:enableOnBackInvokedCallback="false"` so Android 16 sends Back as a key press (`AndroidManifest.xml`). Once upstream has them, a merge brings them back as upstream code; remove them from this list.
 
 To sync: `git fetch upstream && git merge upstream/main`. Then build, and check that the `LATEST` line still points at the fork.
 
