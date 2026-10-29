@@ -765,6 +765,11 @@ class PlayerActivity : Screen() {
             if (!down) wakeKey = 0
             return true
         }
+        // Back with the controls up closes them; the next Back leaves the player.
+        if (shown && event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (!down) hideControls(force = true)
+            return true
+        }
         if (!shown && down) when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> { showControls(bar); return true }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
