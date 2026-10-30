@@ -10,9 +10,75 @@ Write every entry in ASD-STE100 Simplified Technical English (STE):
 - Write instructions as commands: "Select **Subtitles**", not "**Subtitles** can be selected".
 - Use one word for one thing. Use the names that Alder shows on the screen.
 - Put each entry under one heading: `### New`, `### Easier to use` or `### Fixes`, in that order. In each group, put the most important entries first.
-- Start an important entry with a short **bold** name. After an update, Alder shows the first 5 entries. **See all changes** shows all of them under their headings.
+- Start an important entry with a short **bold** name. **See all changes** shows all entries under their headings.
+- Put `<!-- Spotlight -->` before a change to show it in the short What's new list. Put the most important spotlight changes first in each group.
 
 Put changes that are not released under `## Unreleased`. Before each release, read all of `## Unreleased` again and rewrite each entry that does not obey these rules. Then rename that heading to the version number.
+
+## Unreleased
+
+### New
+<!-- Spotlight -->
+- **Alder in your language.** Alder shows menus, buttons and settings in Spanish, Portuguese, French, German, Hindi or Italian. Alder uses the TV language. To change it, select **Settings → Language → App language**.
+<!-- Spotlight -->
+- **Trailers on the title page.** Select **▷ Trailer** on a movie or show to play its trailer. Alder does not add trailers to your watch history.
+- **Subtitle colors.** Choose White, Yellow, Cyan, Cream, or Warm white in **Settings → Subtitles** or while you watch in **Audio & subtitles**.
+<!-- Spotlight -->
+- **Live TV and sport.** If your add-ons have TV channels, sport or events, select **Live** at the top. Select a channel to play it. To choose a source, hold OK.
+<!-- Spotlight -->
+- **Directors and cast.** See directors and lead actors on the title screen. Select a person to see their other works. A label shows the title and year of the focused poster. Select **ⓘ** to see the full story and all cast members with portraits.
+<!-- Spotlight -->
+- **Chapter markers and chapter snap.** See chapter marks and intro marks on the progress bar. Press Up on the bar to jump between chapters.
+<!-- Spotlight -->
+- **Clear dialogue.** Turn on **Settings → Clear dialogue** to boost voices above music and loud effects on TV speakers. You can also turn it on while you watch.
+- **Foreign audio subtitles.** Alder can start subtitles automatically only when the audio is in a different language. Select **Settings → Subtitles → Foreign audio only**.
+- **Still watching?** If you do not press a remote button for 3 episodes, Alder stops before the next episode. Select **Play** or **Exit to Home**.
+- **Sleep timer.** In the player, select **Audio & subtitles**, then select **Sleep**. Choose **After this episode** or **In 60 min**.
+- **Mark episodes as watched.** Hold OK on an episode in the episode guide. Select **Mark as watched**, **Mark as unwatched**, or **Mark previous episodes watched**. Hold OK on a season button to mark all episodes of that season.
+- **New episode tags.** A tungsten tag shows on Continue Watching when a new episode is available.
+- **Protect unreleased episodes.** Alder shows the air date for future episodes and disables playback until they air.
+- **Default tab.** Choose which tab opens when you start Alder. Select **Settings → Profile → Default tab**.
+- **Show or hide tabs.** Turn tabs on or off in **Settings → Profile**.
+- **Featured rows on Home.** Show top recommendations and popular titles below Continue Watching. Turn on **Settings → Profile → Featured on Home**.
+- **Hide rows.** Hold OK on a title in a row, then select **Hide row**. To put it back, select **Settings → Profile → Hidden rows**.
+- **30 GB file limit.** Select **30 GB** in **Settings → Largest file**.
+- **Blur episode thumbnails.** Turn on **Settings → Profile → Blur episode thumbnails**. Alder blurs pictures of unwatched episodes to prevent spoilers.
+
+### Easier to use
+<!-- Spotlight -->
+- **House Lights logos.** Alder uses the tungsten mark on the TV banner, transparent app icon, and small transparent logo.
+- **Content ratings on the title page.** A badge shows the content rating, for example PG-13, R, or TV-MA, before the year.
+- **Compact Up next prompt.** The Up next card uses a smaller width, smaller text, and a single Next episode button.
+- **QWERTY Search keys.** The Search keyboard uses QWERTY letter rows. The microphone icon stays dim until voice search is available.
+- **Audio and subtitle tabs.** Select **Subtitles**, **Audio**, or **Sync & Style**. Active, preferred, and recent tracks appear first. Adjust subtitle sync in the panel.
+- **Clearer title page.** Cast names stay clear in dark glass capsules.
+- **Clearer menus.** Add-on lists, Search, and choice menus use glass that is easy to read.
+- **Clearer player controls.** The control bar shows more video. Player tags and panels use dark glass.
+- **What's new showcase.** The update screen shows important changes first. Select **See all changes** to read the full list.
+<!-- Spotlight -->
+- **Direct play.** When you select Play, Alder starts the video directly. A progress indicator shows while Alder finds the best source. To see all sources, hold OK.
+<!-- Spotlight -->
+- **Cinematic video start.** When you select Play, Alder shows the title art and bottom controls immediately. The progress bar pulses with warm light while Alder connects to the source, and the video fades in smoothly.
+- **Format and debrid badges in the player.** Open the player controls to see badges for resolution, Dolby Vision, HDR, Dolby Atmos, DTS, audio language, subtitles, and your debrid service below the title.
+- **Faster access to Audio & subtitles.** Press Left once from Play / Pause in the player to open **Audio & subtitles**.
+- **Live subtitle sync.** Adjust subtitle timing with Left and Right while the video plays. This works for embedded subtitles and add-on subtitles.
+- **Close player controls.** Press Back to close the controls while the video plays. Press Back again to leave the player.
+- **Exact subtitle remembered.** When you play a video again, Alder uses the exact subtitle track that you selected before.
+- **Update notification dot.** A dot on your profile avatar shows when a new version of Alder is ready.
+- **Install an update from the profile menu.** Select your profile avatar, then select **Install update**. Alder installs version 1.3 over version 1.2.
+- **Faster update checks.** Alder checks for new releases every 4 hours instead of once a day.
+
+### Fixes
+- **Subtitle language list in Audio & subtitles.** All add-on subtitle languages now appear immediately under Subtitles. Quick timing sits below the language list so remote focus moves smoothly.
+- **Up next episode card timing.** When credit timing is present, Alder shows Up next only after the credits start. Fallback window now triggers during the final 15 to 25 seconds instead of a minute early.
+- **Skip intro button timing.** Alder reads MKV intro chapters first. Alder filters low confidence IntroDB segments and stops false zero second prompts when cold opens exist.
+- **Remote focus and scrolling in Audio & subtitles.** Selecting an audio or subtitle track keeps remote focus on the selected track and does not reset the scroll position. Scrolling between tracks operates smoothly and clips cleanly within the scroll viewport.
+- **Smoked glass overlay in Audio & subtitles.** The Audio & subtitles sheet uses the Alder smoked glass recipe for high contrast over video.
+- **Cleaner title page.** The light around **Play** and **Resume** sits in the center. Cast names stay inside the screen margins. Action buttons align in the center.
+- **Install on Fire TV.** Alder installs on Fire TV and Fire OS devices without a package parse error.
+- **Support older TV devices.** Alder supports Android 6.0 and Fire OS 6 devices, such as Fire TV Stick 4K.
+- **Cleaner player controls.** The audio, subtitle, format, and debrid badges sit in one row below the title, and the top progress bar no longer appears while you seek.
+- **Back button on Android 16.** The Back button closes panels and player controls correctly on Android 16.
 
 ## 1.2
 

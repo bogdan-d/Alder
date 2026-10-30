@@ -100,17 +100,65 @@ object Library {
         }.getOrDefault(emptySet())
     }
 
-    /** Ticks [videoId] as watched in that bitfield, as stremio-core's `set_video` does, so other devices show the ✓. */
-    fun markWatched(item: JSONObject, videos: List<Video>, videoId: String) {
+    /** Sets the watched episodes in stremio-core's bitfield, removing it if [seen] is empty. */
+    fun setWatched(item: JSONObject, videos: List<Video>, seen: Set<String>) {
         val ids = videos.sortedWith(compareBy({ it.season }, { it.episode })).map { it.id }
-        val seen = watched(item, videos) + videoId
+        val active = seen.filter { it in ids }.toSet()
+        if (active.isEmpty()) {
+            item.state.remove("watched")
+            item.put("_mtime", now())
+            return
+        }
         val bits = ByteArray((ids.size + 7) / 8)
-        ids.forEachIndexed { i, id -> if (id in seen) bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte() }
-        val last = ids.indexOfLast { it in seen }.takeIf { it >= 0 } ?: return
+        ids.forEachIndexed { i, id -> if (id in active) bits[i / 8] = (bits[i / 8].toInt() or (1 shl (i % 8))).toByte() }
+        val last = ids.indexOfLast { it in active }.takeIf { it >= 0 } ?: run {
+            item.state.remove("watched")
+            item.put("_mtime", now())
+            return
+        }
         val zipped = java.io.ByteArrayOutputStream().also { out ->
             java.util.zip.DeflaterOutputStream(out, java.util.zip.Deflater(6)).use { it.write(bits) }
         }.toByteArray()
         item.state.put("watched", "${ids[last]}:${last + 1}:${Base64.encodeToString(zipped, Base64.NO_WRAP)}")
+        item.put("_mtime", now())
+    }
+
+    /** Ticks [videoId] as watched in that bitfield, as stremio-core's `set_video` does, so other devices show the ✓. */
+    fun markWatched(item: JSONObject, videos: List<Video>, videoId: String) =
+        setWatched(item, videos, watched(item, videos) + videoId)
+
+    /** Removes [videoId] from that bitfield. */
+    fun markUnwatched(item: JSONObject, videos: List<Video>, videoId: String) =
+        setWatched(item, videos, watched(item, videos) - videoId)
+
+    /** Ticks multiple episodes as watched in that bitfield. */
+    fun markEpisodesWatched(item: JSONObject, videos: List<Video>, videoIds: Collection<String>) =
+        setWatched(item, videos, watched(item, videos) + videoIds)
+
+    /** Removes multiple episodes from that bitfield. */
+    fun unmarkEpisodesWatched(item: JSONObject, videos: List<Video>, videoIds: Collection<String>) =
+        setWatched(item, videos, watched(item, videos) - videoIds.toSet())
+
+    /** Episodes strictly prior to [target] in series order (specials excluded unless target is a special). */
+    fun priorEpisodes(videos: List<Video>, target: Video): List<Video> {
+        val sorted = videos.sortedWith(compareBy({ it.season }, { it.episode }))
+        return sorted.filter {
+            if (target.season > 0) it.season > 0 && (it.season < target.season || (it.season == target.season && it.episode < target.episode))
+            else it.season == 0 && it.episode < target.episode
+        }
+    }
+
+    /** The episode after [target] in series order, or null at the end of the series (not advancing into specials). */
+    fun nextEpisode(videos: List<Video>, target: Video): Video? {
+        val sorted = videos.sortedWith(compareBy({ it.season }, { it.episode }))
+        val at = sorted.indexOfFirst { it.id == target.id }.takeIf { it >= 0 } ?: return null
+        return sorted.getOrNull(at + 1)?.takeIf { it.season != 0 || sorted[at].season == 0 }
+    }
+
+    /** The first episode of the next season after [season], or null if this was the last season. */
+    fun nextEpisodeAfterSeason(videos: List<Video>, season: Int): Video? {
+        val sorted = videos.sortedWith(compareBy({ it.season }, { it.episode }))
+        return sorted.firstOrNull { it.season > season }
     }
 
     /** Playback progress, called every few seconds. [playedMs] is time actually watched since the last call. */
@@ -153,8 +201,8 @@ object Library {
         item.put("_mtime", now())
     }
 
-    private val JSONObject.state: JSONObject get() = optJSONObject("state") ?: JSONObject().also { put("state", it) }
-
-    private fun now(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+    fun now(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
         .apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date())
 }
+
+val JSONObject.state: JSONObject get() = optJSONObject("state") ?: JSONObject().also { put("state", it) }

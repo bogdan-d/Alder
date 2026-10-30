@@ -90,6 +90,7 @@ object Images {
      * picture as decoded (software, [widthPx] wide) and returns what to show. [name] keeps its copies apart from plain ones.
      */
     class Look(val name: String, val paint: (Bitmap) -> Bitmap)
+    val blurred = Look("blurred") { src -> frost(src).also { if (it !== src) src.recycle() } }
 
     private val inFlight = ConcurrentHashMap<String, FutureTask<Bitmap?>>()
 

@@ -11,10 +11,10 @@ android {
 
     defaultConfig {
         applicationId = "dev.alder"
-        minSdk = 26
+        minSdk = 23
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.2"
+        versionCode = 6
+        versionName = "1.3"
         // TVs are ARM; the x86 builds of ffmpeg's native code would only add size.
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
@@ -24,11 +24,17 @@ android {
     val keys = rootProject.file("keystore.properties").takeIf { it.exists() }
         ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
     signingConfigs {
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+        }
         if (keys != null) create("release") {
             storeFile = file(keys.getProperty("storeFile"))
             storePassword = keys.getProperty("storePassword")
             keyAlias = keys.getProperty("keyAlias")
             keyPassword = keys.getProperty("keyPassword")
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 
@@ -72,4 +78,6 @@ dependencies {
     // Software audio for what TVs can't decode themselves (DTS, TrueHD), so those files still have sound.
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:$media3+1")
     testImplementation("junit:junit:4.13.2")
+    // Android's org.json is a stub in local unit tests; the real one lets tests parse add-on and IMDb responses.
+    testImplementation("org.json:json:20240303")
 }

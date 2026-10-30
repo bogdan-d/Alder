@@ -23,15 +23,16 @@ object Http {
     var userAgent = "Alder"
 
     /** [strict]: an error answer throws [HttpError] even when its body is JSON (add-ons, not Stremio's API, read so). */
-    fun get(url: String, keep: Boolean = false, timeoutMs: Int = 20_000, strict: Boolean = false): String =
-        text(url, null, keep, timeoutMs, strict)
+    fun get(url: String, keep: Boolean = false, timeoutMs: Int = 20_000, strict: Boolean = false, headers: Map<String, String> = emptyMap()): String =
+        text(url, null, keep, timeoutMs, strict, headers)
 
-    fun post(url: String, json: String, keep: Boolean = false): String = text(url, json, keep)
+    fun post(url: String, json: String, keep: Boolean = false, timeoutMs: Int = 20_000, headers: Map<String, String> = emptyMap()): String =
+        text(url, json, keep, timeoutMs, false, headers)
 
     fun bytes(url: String): ByteArray = request(url, null, cache = true).second
 
-    private fun text(url: String, json: String?, keep: Boolean, timeoutMs: Int = 20_000, strict: Boolean = false): String {
-        val (code, body) = request(url, json, cache = false, timeoutMs)
+    private fun text(url: String, json: String?, keep: Boolean, timeoutMs: Int = 20_000, strict: Boolean = false, headers: Map<String, String> = emptyMap()): String {
+        val (code, body) = request(url, json, cache = false, timeoutMs, headers)
         val text = String(body, Charsets.UTF_8)
         // Stremio's API answers errors as JSON (read by the caller); anything else failed is an error page: say the code.
         if (code >= 400 && (strict || !text.trimStart().startsWith("{"))) throw HttpError(code)
@@ -78,11 +79,12 @@ object Http {
     // host. Disconnecting threw it away, so every picture paid a fresh TCP and TLS handshake first.
     // [cache]: pictures only. The response cache kept an addon's 404 and, revalidated with a 304, served it forever
     // (AIOMetadata's movie search); answers have their own copy in [saved].
-    private fun request(url: String, json: String?, cache: Boolean, timeoutMs: Int = 20_000): Pair<Int, ByteArray> {
+    private fun request(url: String, json: String?, cache: Boolean, timeoutMs: Int = 20_000, headers: Map<String, String> = emptyMap()): Pair<Int, ByteArray> {
         val c = URL(url).openConnection() as HttpURLConnection
         c.useCaches = cache
         // Not Android's "Dalvik/2.1.0": some add-ons behind Cloudflare answer that with a challenge page.
         c.setRequestProperty("User-Agent", userAgent)
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
         c.connectTimeout = minOf(10_000, timeoutMs)
         c.readTimeout = timeoutMs
         if (json != null) {

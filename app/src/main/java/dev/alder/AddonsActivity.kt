@@ -42,7 +42,7 @@ class AddonsActivity : Screen() {
         // A shaded pane so the note stays readable over bright art.
         help = column(Gravity.START, helpName, helpBody.marginTop(8)).apply {
             setPadding(dp(16), dp(14), dp(16), dp(16))
-            background = glassOver(this, 14, shade = 0.35f)
+            background = glassOver(this, 14, shade = FROST_READING)
             visibility = View.INVISIBLE
         }
         val scroll = ScrollView(this).apply {
@@ -51,10 +51,10 @@ class AddonsActivity : Screen() {
         }
         val footer = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            addView(keyHint("OK", "Move or remove"))
+            addView(keyHint("OK", getString(R.string.addons_move_or_remove)))
         }
         val panel = FrameLayout(this).apply {
-            background = glassOver(this, 14)
+            background = glassOver(this, 14, shade = FROST_READING)
             addView(scroll, FrameLayout.LayoutParams(-1, -1).apply { bottomMargin = dp(42) })
             addView(footer, FrameLayout.LayoutParams(-1, dp(36), Gravity.BOTTOM).apply {
                 leftMargin = dp(24); bottomMargin = dp(8)
@@ -84,20 +84,21 @@ class AddonsActivity : Screen() {
         val key = authKey ?: return
         background({ Stremio.addons(key, refresh = true) }) { result ->
             result.onSuccess { addons = it; show() }
-                .onFailure { show(message = "Couldn't reach Stremio. Check the TV's internet.", retry = ::load) }
+                .onFailure { show(message = getString(R.string.addons_unreachable), retry = ::load) }
         }
     }
 
     /** Redraws the list, focusing [focus] (an add-on URL), or its first row. */
     private fun show(focus: String? = null, message: String? = null, retry: (() -> Unit)? = null, loading: Boolean = false) {
         list.removeAllViews()
-        list.addView(text("My add-ons", SERIF_TITLE, serif = true).onArt(), LinearLayout.LayoutParams(-1, -2).apply {
+        list.addView(text(R.string.my_addons, SERIF_TITLE, serif = true).onArt(), LinearLayout.LayoutParams(-1, -2).apply {
             leftMargin = dp(8); topMargin = dp(8)
         })
-        val guidance = "The first add-on that has something answers first. Changes apply to Stremio on all your devices."
+        val sync = getString(R.string.addons_guidance_sync)
+        val guidance = getString(R.string.addons_guidance) + " " + sync
         list.addView(text(guidance, SMALL, color = TEXT_2).onArt().apply {
             text = android.text.SpannableString(guidance).apply {
-                setSpan(android.text.style.ForegroundColorSpan(TUNGSTEN), guidance.indexOf("Changes apply"), guidance.length,
+                setSpan(android.text.style.ForegroundColorSpan(TUNGSTEN), guidance.length - sync.length, guidance.length,
                     android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }, LinearLayout.LayoutParams(-1, -2).apply {
@@ -117,7 +118,7 @@ class AddonsActivity : Screen() {
         else if (message != null) list.addView(text(message, SMALL, color = TUNGSTEN).onArt(),
             LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(16); bottomMargin = dp(8) })
         if (!loading && addons.isEmpty() && message == null) list.addView(
-            text("No add-ons yet. Add them in the Stremio app, then reload here.", BODY, color = TEXT_2).onArt(),
+            text(R.string.addons_none, BODY, color = TEXT_2).onArt(),
             LinearLayout.LayoutParams(-1, -2).apply { leftMargin = dp(16); topMargin = dp(12) })
         var focused: View? = null
         addons.forEachIndexed { index, addon ->
@@ -132,9 +133,9 @@ class AddonsActivity : Screen() {
     }
 
     private fun row(index: Int, addon: Addon?) = FrameLayout(this).apply {
-        val name = addon?.let { addonShortName(it.name) } ?: "Add by URL"
-        val role = addon?.let(::addonRole) ?: "Install from a manifest address"
-        val host = addon?.let(::addonHost).orEmpty()
+        val name = addon?.let { addonShortName(it.name) } ?: getString(R.string.addons_add_by_url)
+        val role = addon?.let { words(addonRole(it)) } ?: getString(R.string.addons_add_by_url_hint)
+        val host = addon?.let(::addonHost)?.let(::words).orEmpty()
         val line = LinearLayout(this@AddonsActivity).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), 0, dp(12), 0)
@@ -147,7 +148,7 @@ class AddonsActivity : Screen() {
             if (host.isNotEmpty()) addView(tag(host), LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
         }
         // OK opens move up / move down / remove, so the hint names OK rather than arrows.
-        val move = if (addon == null) null else keyHint("OK", "Move").apply { visibility = View.GONE }
+        val move = if (addon == null) null else keyHint("OK", getString(R.string.addons_move)).apply { visibility = View.GONE }
             .also { line.addView(it, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(12) }) }
         addView(line, FrameLayout.LayoutParams(-1, -1))
         addView(divider(), FrameLayout.LayoutParams(-1, dp(1), Gravity.BOTTOM))
@@ -155,11 +156,35 @@ class AddonsActivity : Screen() {
             move?.visibility = if (has) View.VISIBLE else View.GONE
             if (has) {
                 help.visibility = if (addon != null) View.VISIBLE else View.INVISIBLE
-                if (addon != null) { helpName.text = name.uppercase(); helpBody.text = addonHelp(addon, index) }
+                if (addon != null) { helpName.text = name.uppercase(); helpBody.text = help(addon, index) }
             }
         })
-        contentDescription = if (addon == null) name else "${index + 1}. $name. $role. $host. Move or remove"
+        contentDescription = if (addon == null) name else getString(R.string.addons_row_description, index + 1, name, role, host)
         setOnClickListener { if (addon == null) askUrl() else edit(addon) }
+    }
+
+    /** [addonRole] and [addonHost] give English parts joined by " · "; each known part in the viewer's language. */
+    private fun words(english: String) = english.split(" · ").joinToString(" · ") { part ->
+        when (part) {
+            "Files on this network" -> getString(R.string.addon_role_local)
+            "Recommendations" -> getString(R.string.addon_role_recommendations)
+            "Top Picks on Home" -> getString(R.string.addon_role_top_picks)
+            "Watch history to Trakt" -> getString(R.string.addon_role_trakt)
+            "Titles and details" -> getString(R.string.addon_role_details)
+            "Streams" -> getString(R.string.addon_role_streams)
+            "Subtitles" -> getString(R.string.addon_role_subtitles)
+            "Catalogs" -> getString(R.string.addon_role_catalogs)
+            "Add-on" -> getString(R.string.addon_role_addon)
+            "Built-in" -> getString(R.string.addon_built_in)
+            else -> part // a host's own name ("ElfHosted")
+        }
+    }
+
+    /** [addonHelp] in the viewer's language: what the add-on does and where it stands in the answer order. */
+    private fun help(addon: Addon, index: Int): String {
+        val place = resources.getStringArray(R.array.ordinals).getOrNull(index) ?: (index + 1).toString()
+        return if (addon.id.contains("watchly", true)) getString(R.string.addon_watchly_help, place)
+            else getString(R.string.addon_answers, words(addonRole(addon)), place)
     }
 
     private fun tight(view: TextView) = view.apply {
@@ -172,11 +197,11 @@ class AddonsActivity : Screen() {
     private fun edit(a: Addon) {
         val i = addons.indexOf(a)
         val actions = listOfNotNull(
-            if (i > 0) "Move up" to { save(addons.toMutableList().apply { add(i - 1, removeAt(i)) }, a.transportUrl) } else null,
-            if (i < addons.size - 1) "Move down" to { save(addons.toMutableList().apply { add(i + 1, removeAt(i)) }, a.transportUrl) } else null,
-            if (!a.locked) "Remove" to {
-                choose("Remove ${addonShortName(a.name)}?", listOf("Cancel", "Remove"),
-                    "This changes Stremio on all your devices.") { n ->
+            if (i > 0) getString(R.string.addons_move_up) to { save(addons.toMutableList().apply { add(i - 1, removeAt(i)) }, a.transportUrl) } else null,
+            if (i < addons.size - 1) getString(R.string.addons_move_down) to { save(addons.toMutableList().apply { add(i + 1, removeAt(i)) }, a.transportUrl) } else null,
+            if (!a.locked) getString(R.string.action_remove) to {
+                choose(getString(R.string.addons_remove, addonShortName(a.name)), listOf(getString(R.string.action_cancel), getString(R.string.action_remove)),
+                    getString(R.string.addons_remove_desc)) { n ->
                     if (n == 1) save(addons - a, addons.getOrNull(i + 1)?.transportUrl)
                 }
                 Unit
@@ -200,12 +225,12 @@ class AddonsActivity : Screen() {
         dialog.setContentView(column(Gravity.START).apply {
             setPadding(dp(20), dp(20), dp(20), dp(20))
             background = glassOver(this, 14)
-            addView(text("Add an add-on", BODY, bold = true))
+            addView(text(R.string.addons_add_title, BODY, bold = true))
             addView(field, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(14) })
             addView(LinearLayout(this@AddonsActivity).apply {
                 gravity = Gravity.END
-                addView(chip("Cancel").apply { setOnClickListener { dialog.dismiss() } })
-                addView(pill("Add").apply {
+                addView(chip(R.string.action_cancel).apply { setOnClickListener { dialog.dismiss() } })
+                addView(pill(R.string.action_add).apply {
                     setOnClickListener { val url = field.text.toString().trim(); dialog.dismiss(); install(url) }
                 }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
             }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
@@ -224,7 +249,7 @@ class AddonsActivity : Screen() {
         val url = typed.replaceFirst(Regex("^stremio://", RegexOption.IGNORE_CASE), "https://")
             .let { if (it.contains("://")) it else "https://$it" }
             .let { if (it.endsWith("/manifest.json")) it else it.trimEnd('/') + "/manifest.json" }
-        if (addons.any { it.transportUrl == url }) return show(url, "Already installed.")
+        if (addons.any { it.transportUrl == url }) return show(url, getString(R.string.addons_already))
         background({
             val manifest = JSONObject(Http.get(url))
             require(manifest.has("id") && manifest.has("resources")) { "That address isn't a Stremio addon." }
@@ -232,7 +257,7 @@ class AddonsActivity : Screen() {
                 .put("flags", JSONObject().put("official", false).put("protected", false)))
         }) { result ->
             result.onSuccess { save(addons + it, url) }
-                .onFailure { show(ADD_URL, "Couldn't add the add-on. Check its address and try again.") }
+                .onFailure { show(ADD_URL, getString(R.string.addons_add_failed)) }
         }
     }
 
@@ -240,7 +265,7 @@ class AddonsActivity : Screen() {
         val key = authKey ?: return
         background({ Stremio.setAddons(key, next) }) { result ->
             result.onSuccess { addons = next; show(focus) }
-                .onFailure { show(focus, "Couldn't save the change to Stremio.", retry = { save(next, focus) }) }
+                .onFailure { show(focus, getString(R.string.addons_save_failed), retry = { save(next, focus) }) }
         }
     }
 

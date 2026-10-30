@@ -66,9 +66,9 @@ class StreamsActivity : Screen() {
         }
         val cols = LinearLayout(this).apply {
             setPadding(dp(12), dp(8), dp(12), dp(4))
-            addView(caps("Quality", TEXT_3).apply { maxLines = 1 }, LinearLayout.LayoutParams(dp(QUALITY_W), -2))
-            addView(caps("Release", TEXT_3), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(caps("Size", TEXT_3).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(dp(72), -2))
+            addView(caps(R.string.streams_quality, TEXT_3).apply { maxLines = 1 }, LinearLayout.LayoutParams(dp(QUALITY_W), -2))
+            addView(caps(R.string.streams_release, TEXT_3), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(caps(R.string.streams_size, TEXT_3).apply { gravity = Gravity.END }, LinearLayout.LayoutParams(dp(72), -2))
         }
         languageStrip = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false; clipChildren = false; clipToPadding = false; visibility = View.GONE
@@ -91,7 +91,7 @@ class StreamsActivity : Screen() {
                 background = rounded(TUNGSTEN, 3); includeFontPadding = false; setPadding(dp(4), dp(1), dp(4), dp(1))
             })
             val preset = presetName()
-            val line = "  Play this source  ·  Best match follows your stream settings: $preset."
+            val line = getString(R.string.streams_help, preset)
             addView(text("", SMALL, color = TEXT_2).onArt().apply {
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
                 // The preset in full-strength bold, as the mock reads it.
@@ -105,7 +105,9 @@ class StreamsActivity : Screen() {
         art = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; alpha = 0f }
         val still = intent.getStringExtra("still")
         val backArt = intent.getStringExtra("background") ?: intent.getStringExtra("poster")
-        Images.load(still ?: backArt, art, resources.displayMetrics.widthPixels, orElse = backArt.takeIf { still != null }) {
+        val blurStill = intent.getBooleanExtra("blurStill", false)
+        Images.load(still ?: backArt, art, resources.displayMetrics.widthPixels, orElse = backArt.takeIf { still != null },
+            look = if (blurStill && still != null) Images.blurred else null) {
             art.animate().alpha(1f).setDuration(250).start()
             refrost()
         }
@@ -141,7 +143,7 @@ class StreamsActivity : Screen() {
         val lenders = Profiles.streamLenders(this)
         // Asks every add-on again (a fixed connection, or an add-on set up again on the phone); a source found plays.
         fun tryAgain(focus: Boolean = true) {
-            val again = pill("Try again").apply { setOnClickListener { recreate() } }
+            val again = pill(R.string.action_try_again).apply { setOnClickListener { recreate() } }
             rows.addView(again, wrap().apply { marginStart = dp(12); topMargin = dp(16); bottomMargin = dp(12) })
             if (focus) again.requestFocus()
         }
@@ -159,12 +161,11 @@ class StreamsActivity : Screen() {
                 (own.any { !it.official } || lent.isNotEmpty())
         }) { result ->
             val (addons, anyStreams) = result.getOrElse {
-                status.text = "Couldn't load sources. Check your connection and try again."
+                status.text = getString(R.string.streams_load_failed)
                 return@background tryAgain()
             }
             if (addons.isEmpty()) {
-                status.text = if (anyStreams) "None of your add-ons have sources for this kind of title. Add one that does in Stremio."
-                    else "No stream add-ons are connected. Add one in Stremio to find sources."
+                status.text = getString(if (anyStreams) R.string.streams_none_for_kind else R.string.streams_no_addons)
                 return@background tryAgain()
             }
             val answers = arrayOfNulls<List<Stream>>(addons.size)
@@ -181,15 +182,15 @@ class StreamsActivity : Screen() {
             /** The list in the chosen audio language; Best match is the first within Settings' limits that's in it. */
             fun drawRows(focusList: Boolean) {
                 val shown = audio?.let { lang -> ordered.filter { speaks(it, lang) } } ?: ordered
-                count.text = "${shown.size} " + if (shown.size == 1) "source" else "sources"
+                count.text = plural(R.plurals.streams_count, shown.size)
                 rows.removeAllViews()
                 cols.visibility = if (shown.isEmpty()) View.GONE else View.VISIBLE
                 if (shown.isEmpty()) {
-                    rows.addView(text("No playable sources found.", BODY, color = TEXT_2).onArt().apply {
+                    rows.addView(text(R.string.streams_none_playable, BODY, color = TEXT_2).onArt().apply {
                         setPadding(dp(12), dp(12), 0, 0)
                     })
                     val unplayable = answers.sumOf { a -> a.orEmpty().count { it.isVideo && !it.playableOn(tv) } }
-                    noSourceReasons(addons.map { it.name }, failures, torrents, links, unplayable).forEach { line ->
+                    noSourceReasons(addons.map { it.name }, failures, torrents, links, unplayable, sourceWords).forEach { line ->
                         rows.addView(text(line, SMALL, color = TEXT_2).onArt().apply { setPadding(dp(12), dp(8), dp(12), 0) },
                             LinearLayout.LayoutParams(-1, -2))
                     }
@@ -271,7 +272,7 @@ class StreamsActivity : Screen() {
         if (codes.size < 2) { languageStrip.visibility = View.GONE; audio = null; return }
         val line = LinearLayout(this).apply { clipChildren = false; setPadding(dp(2), dp(2), dp(2), dp(2)) }
         val chips = mutableMapOf<String?, android.widget.TextView>()
-        fun label(code: String?) = code?.let(::languageName) ?: "All languages"
+        fun label(code: String?) = code?.let(::languageName) ?: getString(R.string.streams_all_languages)
         (listOf<String?>(null) + codes).forEach { code ->
             val control = chip(label(code), code == audio).apply {
                 setOnClickListener {
@@ -309,9 +310,8 @@ class StreamsActivity : Screen() {
                 setImageBitmap(code); background = rounded(TEXT, 8); setPadding(dp(4), dp(4), dp(4), dp(4))
             }, wrap())
             addView(column(Gravity.START,
-                text("Scan with your phone to set up ${addon.name}", BODY, bold = true).onArt(),
-                text(if (torrentsOnly) "Add a debrid account there, such as Real-Debrid, and install it again. Then select Try again."
-                    else "Enter a new key or sign in again there, and install it again. Then select Try again.",
+                text(getString(R.string.streams_scan, addon.name), BODY, bold = true).onArt(),
+                text(if (torrentsOnly) R.string.streams_scan_debrid else R.string.streams_scan_key,
                     SMALL, color = TEXT_2).onArt().marginTop(6),
             ), LinearLayout.LayoutParams(0, -2, 1f).apply { marginStart = dp(16) })
         }
@@ -324,59 +324,18 @@ class StreamsActivity : Screen() {
      * screen's resolution or HDR on a screen without it moved down, 3D and hard-coded subtitles last, and then Settings'
      * stream preferences. The sort is stable, so ties keep the addon's order.
      */
-    private fun rank(streams: List<Stream>, videoId: String): List<Stream> {
-        val prefs = getSharedPreferences("sources", MODE_PRIVATE)
-        val file = prefs.getString("file:$videoId", null)
-        val binge = prefs.getString("binge:${intent.getStringExtra("id")}", null)
-        val tv = Device.of(this)
-        val prefer = preference()
-        val lower = intent.getIntExtra("maxHeight", 0) > 0 // the player asked for less: the tallest that's left
-        return streams.sortedWith(compareByDescending<Stream> { if (lower) it.height else 0 }
-            .thenByDescending { file != null && it.filename == file }
-            .thenByDescending { binge != null && it.bingeGroup == binge }
-            .thenBy { it.awkward }
-            .thenBy { it.dolbyVisionOnly && !tv.dolbyVision } // may show no picture (or purple and green) here: last
-            .thenByDescending { it.fit(tv) }
-            .thenByDescending(prefer))
-    }
+    private fun rank(streams: List<Stream>, videoId: String): List<Stream> =
+        StreamsResolver.rank(this, streams, videoId, intent.getStringExtra("id"), intent.getIntExtra("maxHeight", 0))
 
-    /** Settings' stream preferences as a score, higher first. At "No preference" with TV speakers, every source scores 0. */
-    private fun preference(): (Stream) -> Int {
-        val release = Settings.release(this)
-        val hdr = Settings.hdrPref(this)
-        val dub = Settings.dub(this)
-        val language = Settings.audioLanguage(this)
-        val receiver = Settings.passthrough(this)
-        return { s ->
-            when (release) {
-                "remux" -> if (s.remux) 3 else if (s.bluray) 1 else 0
-                "encode" -> if (s.remux) -2 else if (s.bluray || s.web) 2 else 0
-                "web" -> if (s.web && !s.remux) 2 else if (s.remux) -2 else 0
-                else -> 0
-            } + when (hdr) {
-                "dv" -> if (s.dolbyVision) 2 else if (s.hdr) 1 else 0
-                "hdr10" -> if (s.hdr) 2 else 0
-                else -> 0
-            } + when (dub) {
-                "original" -> if (s.dubbed) -2 else 0
-                "mine" -> if (s.mentions(language)) 2 else if (s.multiAudio) 1 else 0
-                else -> 0
-            } + if (receiver && s.bigAudio) 1 else 0 // a receiver gets Atmos and lossless tracks; TV speakers don't
-        }
-    }
+    private fun preference(): (Stream) -> Int = StreamsResolver.preference(this)
 
-    /** Within Settings' limits (quality, file size, HDR), and never a cam or screener. Unknown sizes and resolutions pass. */
-    private fun wanted(s: Stream): Boolean {
-        val maxHeight = intent.getIntExtra("maxHeight", 0).takeIf { it > 0 } ?: Settings.maxHeight(this) // the player asks for less
-        val maxBytes = Settings.maxSizeGb(this) * 1_073_741_824L
-        return (maxHeight == 0 || s.height == 0 || s.height <= maxHeight) && (maxBytes == 0L || s.size == 0L || s.size <= maxBytes) &&
-            (Settings.hdr(this) || !s.isHdr) && !s.cam
-    }
+    private fun wanted(s: Stream): Boolean =
+        StreamsResolver.wanted(this, s, intent.getIntExtra("maxHeight", 0))
 
     private fun streamRow(s: Stream, addon: String, best: Boolean): View {
-        val quality = text(if (s.height > 0) "${s.height}p" else "Auto", BODY, bold = true).onArt()
+        val quality = text(if (s.height > 0) "${s.height}p" else getString(R.string.streams_auto), BODY, bold = true).onArt()
         val detail = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        if (best) detail.addView(text("BEST MATCH", 9f, bold = true, color = BASE).apply {
+        if (best) detail.addView(text(getString(R.string.streams_best_match).uppercase(), 9f, bold = true, color = BASE).apply {
             letterSpacing = 0.04f
             background = rounded(TUNGSTEN, 3)
             setPadding(dp(5), dp(2), dp(5), dp(2))
@@ -386,7 +345,13 @@ class StreamsActivity : Screen() {
         }, wrap().apply { marginEnd = dp(6) })
         // The debrid service first ("RD ⚡": cached on Real-Debrid, starts at once), then the release's own tags.
         (listOfNotNull(s.debrid?.tag) + s.tags.filter { it !in listOf("BluRay", "WEB") }.take(if (best) 1 else 2)).forEach { tag ->
-            detail.addView(text(tag.uppercase(), 9f, bold = true, color = TUNGSTEN).apply {
+            val words = when (tag) {
+                "Multi audio" -> getString(R.string.streams_tag_multi_audio)
+                "Dub" -> getString(R.string.streams_tag_dub)
+                "Hard subs" -> getString(R.string.streams_tag_hard_subs)
+                else -> tag
+            }
+            detail.addView(text(words.uppercase(), 9f, bold = true, color = TUNGSTEN).apply {
                 letterSpacing = 0.03f
                 background = GradientDrawable().apply {
                     setColor(Color.TRANSPARENT); cornerRadius = dp(3).toFloat(); setStroke(dp(1), 0x80F3D9B1.toInt())
@@ -424,13 +389,34 @@ class StreamsActivity : Screen() {
         val height = Settings.maxHeight(this)
         val size = Settings.maxSizeGb(this)
         return when {
-            release == "" && hdr == "" && height == 0 && size == 0 -> "Add-on's order"
-            release == "remux" && hdr == "dv" && height == 0 && size == 0 -> "Best picture"
-            release == "encode" && hdr == "" && height == 0 && size == 20 -> "Balanced"
-            release == "web" && hdr == "" && height == 1080 && size == 10 -> "Fast start"
-            else -> "Custom"
+            release == "" && hdr == "" && height == 0 && size == 0 -> getString(R.string.preset_addon_order)
+            release == "remux" && hdr == "dv" && height == 0 && size == 0 -> getString(R.string.preset_best_picture)
+            release == "encode" && hdr == "" && height == 0 && size == 20 -> getString(R.string.preset_balanced)
+            release == "web" && hdr == "" && height == 1080 && size == 10 -> getString(R.string.preset_fast_start)
+            else -> getString(R.string.custom)
         }
     }
+
+    /** [noSourceReasons] in the viewer's language. */
+    private val sourceWords by lazy { object : SourceWords() {
+        override fun failed(names: String) = getString(R.string.no_sources_failed, names)
+        override fun torrentsOnly(names: String) = getString(R.string.no_sources_torrents, names)
+        override fun linksOnly(names: String) = getString(R.string.no_sources_links, names)
+        override fun unplayable(count: Int) = plural(R.plurals.no_sources_unplayable, count)
+        override fun none() = getString(R.string.no_sources_none)
+        override fun reason(e: Throwable) = when (val english = failureReason(e)) {
+            "key or sign-in refused" -> getString(R.string.failure_refused)
+            "too many requests" -> getString(R.string.failure_too_many)
+            "having problems" -> getString(R.string.failure_server)
+            "timed out" -> getString(R.string.failure_timeout)
+            "address not found" -> getString(R.string.failure_no_address)
+            "connection refused" -> getString(R.string.failure_connection)
+            "secure connection failed" -> getString(R.string.failure_secure)
+            "not a source list" -> getString(R.string.failure_not_sources)
+            "error" -> getString(R.string.failure_error)
+            else -> english // the add-on's own words ("HTTP 400")
+        }
+    } }
 
     private companion object {
         const val TRY = 3
@@ -476,23 +462,28 @@ internal fun sourceSummary(s: Stream): String {
  * torrents (they need a debrid service) or only links for a browser or YouTube, and sources in a format this TV can't
  * decode.
  */
-internal fun noSourceReasons(names: List<String>, failures: Array<Throwable?>, torrents: IntArray, links: IntArray, unplayable: Int): List<String> {
-    val failed = names.indices.filter { failures[it] != null }.map { "${names[it]} (${failureReason(failures[it]!!)})" }
+internal fun noSourceReasons(names: List<String>, failures: Array<Throwable?>, torrents: IntArray, links: IntArray, unplayable: Int,
+                             words: SourceWords = SourceWords()): List<String> {
+    val failed = names.indices.filter { failures[it] != null }.map { "${names[it]} (${words.reason(failures[it]!!)})" }
     val torrentOnly = names.indices.filter { failures[it] == null && torrents[it] > 0 }.map { names[it] }
     val linkOnly = names.indices.filter { failures[it] == null && torrents[it] == 0 && links[it] > 0 }.map { names[it] }
     return listOfNotNull(
-        failed.takeIf { it.isNotEmpty() }?.let {
-            "Couldn't get sources from ${it.joinToString(", ")}. Try again, or check the add-on in Stremio."
-        },
-        torrentOnly.takeIf { it.isNotEmpty() }?.let {
-            "${it.joinToString(", ")} found only torrents. A TV plays torrents through a debrid service, such as Real-Debrid, " +
-                "connected in the add-on's settings."
-        },
-        linkOnly.takeIf { it.isNotEmpty() }?.let {
-            "${it.joinToString(", ")} only has links that open in a browser or on YouTube, which Alder can't play."
-        },
-        unplayable.takeIf { it > 0 }?.let { "$it ${if (it == 1) "source needs" else "sources need"} a video format this TV can't decode." },
-    ).ifEmpty { listOf("Your add-ons have no sources for this title.") }
+        failed.takeIf { it.isNotEmpty() }?.let { words.failed(it.joinToString(", ")) },
+        torrentOnly.takeIf { it.isNotEmpty() }?.let { words.torrentsOnly(it.joinToString(", ")) },
+        linkOnly.takeIf { it.isNotEmpty() }?.let { words.linksOnly(it.joinToString(", ")) },
+        unplayable.takeIf { it > 0 }?.let(words::unplayable),
+    ).ifEmpty { listOf(words.none()) }
+}
+
+/** The lines of [noSourceReasons]: English here, the viewer's language from StreamsActivity. */
+internal open class SourceWords {
+    open fun failed(names: String) = "Couldn't get sources from $names. Try again, or check the add-on in Stremio."
+    open fun torrentsOnly(names: String) =
+        "$names found only torrents. A TV plays torrents through a debrid service, such as Real-Debrid, connected in the add-on's settings."
+    open fun linksOnly(names: String) = "$names only has links that open in a browser or on YouTube, which Alder can't play."
+    open fun unplayable(count: Int) = "$count ${if (count == 1) "source needs" else "sources need"} a video format this TV can't decode."
+    open fun none() = "Your add-ons have no sources for this title."
+    open fun reason(e: Throwable) = failureReason(e)
 }
 
 /** An add-on refused the request: its key or account expired, or was never set up. */

@@ -10,7 +10,6 @@ Fork-only changes so far:
 
 - `Updates.kt`: `LATEST` points at this fork's releases. Merges from upstream must keep this line.
 - `AGENTS.md`: this file.
-- Player fixes, offered upstream in [aradhyas8/Alder#40](https://github.com/aradhyas8/Alder/pull/40) (branch `player-fixes`): the exact subtitle remembered per video (`PlayerActivity.kt`, `SettingsActivity.kt`), Back closing the controls first, and `android:enableOnBackInvokedCallback="false"` so Android 16 sends Back as a key press (`AndroidManifest.xml`). Once upstream has them, a merge brings them back as upstream code; remove them from this list.
 
 To sync: `git fetch upstream && git merge upstream/main`. Then build, and check that the `LATEST` line still points at the fork.
 
@@ -41,7 +40,7 @@ A TV in standby shows as `offline` in `adb devices`, and stays that way after it
 
 ## Releasing an update
 
-The TVs check this fork's latest GitHub release once a day and offer to install it.
+The TVs check this fork's latest GitHub release every 4 hours and offer to install it.
 
 1. Raise `versionCode` and `versionName` in `app/build.gradle.kts`, and add notes under `## <versionName>` in `CHANGELOG.md`, following the writing rules at the top of that file. The app shows these notes in "What's new". Upstream adds its own sections at the same place, so expect a small conflict there on the next merge.
 2. `sh ./gradlew assembleRelease`

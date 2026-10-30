@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.speech.RecognizerIntent
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
@@ -93,7 +92,7 @@ class SearchActivity : Screen() {
         root.addView(art, FrameLayout.LayoutParams(-1, -1))
         root.addView(View(this).apply {
             background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(0xF20E0C0A.toInt(), 0xD90E0C0A.toInt(), 0xA00E0C0A.toInt(), 0x1A0E0C0A))
+                intArrayOf(0xA60E0C0A.toInt(), 0x8C0E0C0A.toInt(), 0x660E0C0A, 0x1A0E0C0A))
         }, FrameLayout.LayoutParams(-1, -1))
         root.addView(View(this).apply {
             background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
@@ -114,7 +113,7 @@ class SearchActivity : Screen() {
             imageTintList = ColorStateList.valueOf(TEXT_2)
         }, LinearLayout.LayoutParams(dp(15), dp(15)))
         input = EditText(this).apply {
-            hint = "Search"
+            hint = getString(R.string.nav_search)
             setHintTextColor(TEXT_3)
             setTextColor(TEXT)
             textSize = BODY
@@ -138,7 +137,7 @@ class SearchActivity : Screen() {
             setImageResource(R.drawable.ic_close)
             imageTintList = ColorStateList.valueOf(TEXT_2)
             setPadding(dp(4), dp(4), dp(4), dp(4))
-            contentDescription = "Clear search"
+            contentDescription = getString(R.string.search_clear)
             visibility = View.GONE
             rowFocus(11)
             setOnClickListener {
@@ -150,26 +149,31 @@ class SearchActivity : Screen() {
         }
         field.addView(clear, LinearLayout.LayoutParams(dp(22), dp(22)).apply { marginStart = dp(4) })
         clearSearch = clear
-        val fieldRest = glassOver(field, 17, shade = LEFT_SHADE)
+        val fieldRest = glassOver(field, 17, shade = FROST_DENSE)
         field.background = fieldRest
         input.setOnFocusChangeListener { _, has ->
-            field.background = if (has) glass(17, true) else fieldRest
+            field.background = if (has) android.graphics.drawable.LayerDrawable(arrayOf(fieldRest,
+                GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    cornerRadius = dp(17).toFloat()
+                    setStroke(dp(1), TUNGSTEN_RIM)
+                })) else fieldRest
             placeCursor()
             if (!has) {
                 (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken, 0)
             }
         }
-        root.addView(field, FrameLayout.LayoutParams(dp(228), dp(34)).apply { leftMargin = dp(48); topMargin = dp(88) })
+        root.addView(field, FrameLayout.LayoutParams(dp(284), dp(34)).apply { leftMargin = dp(48); topMargin = dp(88) })
 
         keyboard = column(Gravity.START).apply {
             setPadding(dp(10), dp(10), dp(10), dp(10))
-            background = glassOver(this, 14, shade = LEFT_SHADE)
+            background = glassOver(this, 14, shade = FROST_DENSE)
         }
         buildKeyboard()
-        root.addView(keyboard, FrameLayout.LayoutParams(dp(228), dp(220)).apply { leftMargin = dp(48); topMargin = dp(134) })
+        root.addView(keyboard, FrameLayout.LayoutParams(dp(284), dp(190)).apply { leftMargin = dp(48); topMargin = dp(134) })
 
         recentBox = column(Gravity.START)
-        root.addView(recentBox, FrameLayout.LayoutParams(dp(228), -2).apply { leftMargin = dp(48); topMargin = dp(375) })
+        root.addView(recentBox, FrameLayout.LayoutParams(dp(284), -2).apply { leftMargin = dp(48); topMargin = dp(345) })
         showRecent()
 
         heroLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START }
@@ -190,8 +194,8 @@ class SearchActivity : Screen() {
             addView(heroAbout, LinearLayout.LayoutParams(dp(420), -2).apply { topMargin = dp(5) })
             visibility = View.INVISIBLE
         }
-        root.addView(hero, FrameLayout.LayoutParams(dp((width - 368).toInt()), dp(122)).apply {
-            leftMargin = dp(320); topMargin = dp(88)
+        root.addView(hero, FrameLayout.LayoutParams(dp((width - 408).toInt()), dp(122)).apply {
+            leftMargin = dp(360); topMargin = dp(88)
         })
         results = column(Gravity.START)
         resultsScroll = ScrollView(this).apply {
@@ -199,8 +203,8 @@ class SearchActivity : Screen() {
             addView(results)
         }
         // Runs to the screen's right edge, as Home's rows do: stopping 48 dp short sliced the last poster in half.
-        root.addView(resultsScroll, FrameLayout.LayoutParams(dp((width - 320).toInt()), dp((height - 220).toInt())).apply {
-            leftMargin = dp(320); topMargin = dp(220)
+        root.addView(resultsScroll, FrameLayout.LayoutParams(dp((width - 360).toInt()), dp((height - 220).toInt())).apply {
+            leftMargin = dp(360); topMargin = dp(220)
         })
         window.setBackgroundDrawable(null)
         setContentView(root)
@@ -244,7 +248,8 @@ class SearchActivity : Screen() {
             background = glass(15)
             rowFocus(15, rest = { glass(15) })
             setOnClickListener {
-                choose(profile?.name ?: "Profile", listOf("Switch profile", "Settings")) { picked ->
+                choose(profile?.name ?: getString(R.string.nav_profile),
+                    listOf(getString(R.string.menu_switch_profile), getString(R.string.menu_settings))) { picked ->
                     startActivity(Intent(this@SearchActivity,
                         if (picked == 0) ProfilesActivity::class.java else SettingsActivity::class.java)
                         .apply { if (picked == 0) {
@@ -261,7 +266,7 @@ class SearchActivity : Screen() {
         }
         val searchTab = FrameLayout(this).apply {
             isFocusable = true
-            contentDescription = "Search"
+            contentDescription = getString(R.string.nav_search)
             addView(ImageView(this@SearchActivity).apply {
                 setImageResource(R.drawable.ic_search)
                 imageTintList = ColorStateList.valueOf(TEXT)
@@ -272,8 +277,10 @@ class SearchActivity : Screen() {
             setOnClickListener { input.requestFocus() }
         }
         nav.addView(searchTab, LinearLayout.LayoutParams(dp(44), dp(30)))
-        listOf("Home", "Shows", "Movies", "My List").forEach { page ->
-            nav.addView(text(page, BODY, color = TEXT_2).apply {
+        // The page goes to MainActivity by its English name; the bar shows it in the viewer's language.
+        listOf("Home" to R.string.tab_home, "Shows" to R.string.tab_shows, "Movies" to R.string.tab_movies,
+            "My List" to R.string.tab_my_list).forEach { (page, words) ->
+            nav.addView(text(words, BODY, color = TEXT_2).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(12), 0, dp(12), 0)
                 isFocusable = true
@@ -289,7 +296,7 @@ class SearchActivity : Screen() {
                 }
             }, LinearLayout.LayoutParams(-2, dp(30)).apply { marginStart = dp(4) })
         }
-        nav.background = glassOver(nav, 20, shade = 0.4f)
+        nav.background = glassOver(nav, 20, shade = FROST_READING)
         bar.addView(nav, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
         bar.addView(TextClock(this).apply {
             format12Hour = "h:mm a"
@@ -302,22 +309,20 @@ class SearchActivity : Screen() {
     }
 
     private fun buildKeyboard() {
-        val letters = "abcdefghijklmnopqrstuvwxyz"
-        for (rowIndex in 0 until 4) {
+        val letterRows = listOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
+        val letters = letterRows.joinToString("")
+        letterRows.forEach { rowLetters ->
             val row = keyRow()
-            for (column in 0 until 6) {
-                val key = key(letters[rowIndex * 6 + column].toString(), row, 1, column == 5) {
-                    append((characterKeys[rowIndex * 6 + column].text).toString())
+            rowLetters.forEachIndexed { column, letter ->
+                val index = characterKeys.size
+                val key = key(letter.toString(), row, 1, column == rowLetters.lastIndex) {
+                    append(characterKeys[index].text.toString())
                 }
                 characterKeys += key
             }
         }
-        val fifth = keyRow()
-        for (index in 24..25) {
-            val key = key(letters[index].toString(), fifth, 1, false) { append(characterKeys[index].text.toString()) }
-            characterKeys += key
-        }
-        val mode = key("123", fifth, 1, false) {
+        val controls = keyRow()
+        val mode = key("123", controls, 3, false) {
             numeric = !numeric
             val symbols = "1234567890@#$%&*()!?.,:/+"
             characterKeys.forEachIndexed { index, view ->
@@ -326,32 +331,25 @@ class SearchActivity : Screen() {
             modeLabel?.text = if (numeric) "ABC" else "123"
         }
         modeLabel = mode
-        key("−", fifth, 1, false) { append("-") }
-        key("⌫", fifth, 2, true) { delete() }
+        key("−", controls, 2, false) { append("-") }
+        key("⌫", controls, 5, true) { delete() }
         val last = keyRow()
-        val speech = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-        val canSpeak = speech.resolveActivity(packageManager) != null
-        key("SPACE", last, if (canSpeak) 4 else 6, !canSpeak) { append(" ") }
-        if (canSpeak) {
-            key("", last, 2, true) {
-                runCatching {
-                    startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    }, SPEECH)
-                }.onFailure { choose("Voice search is unavailable on this TV.", listOf("OK")) {} }
-            }.apply {
-                contentDescription = "Voice search"
-                setCompoundDrawablesRelative(null, getDrawable(R.drawable.ic_mic)?.mutate()?.apply {
-                    setTint(TUNGSTEN); setBounds(0, 0, dp(13), dp(17))
-                }, null, null)
-            }
-        }
+        key(getString(R.string.search_space).uppercase(), last, 8, true) { append(" ") }
+        last.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_mic)
+            imageTintList = ColorStateList.valueOf(TEXT_3)
+            scaleType = ImageView.ScaleType.CENTER
+            alpha = 0.45f
+            contentDescription = getString(R.string.search_voice_unavailable)
+            isFocusable = false
+            isClickable = false
+        }, LinearLayout.LayoutParams(dp(49), -1).apply { marginStart = dp(3) })
     }
 
     private var modeLabel: TextView? = null
 
     private fun keyRow() = LinearLayout(this).apply {
-        gravity = Gravity.CENTER_VERTICAL
+        gravity = Gravity.CENTER
         keyboard.addView(this, LinearLayout.LayoutParams(-1, dp(30)).apply { if (keyboard.childCount > 0) topMargin = dp(4) })
     }
 
@@ -369,8 +367,8 @@ class SearchActivity : Screen() {
             if (previous != null && previous !== view && !previous.hasFocus()) previous.background = null
             click()
         }
-        row.addView(view, LinearLayout.LayoutParams(0, -1, span.toFloat()).apply {
-            if (row.childCount > 0) marginStart = dp(4)
+        row.addView(view, LinearLayout.LayoutParams(dp(23 * span + 3 * (span - 1)), -1).apply {
+            if (row.childCount > 0) marginStart = dp(3)
         })
         if (firstKey == null) firstKey = view
         if (rightEdge) rightEdgeKeys += view
@@ -418,18 +416,6 @@ class SearchActivity : Screen() {
         return super.dispatchKeyEvent(event)
     }
 
-    @Deprecated("Android result callback")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != SPEECH || resultCode != RESULT_OK) return
-        val words = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
-        input.setText(words)
-        input.setSelection(input.length())
-        input.requestFocus()
-        main.removeCallbacks(typed)
-        search(false)
-    }
-
     private fun recentKey() = "recent:${Profiles.active(this)?.id.orEmpty()}"
 
     private fun recent() = getSharedPreferences("search", MODE_PRIVATE).getString(recentKey(), "").orEmpty()
@@ -445,7 +431,7 @@ class SearchActivity : Screen() {
         recentBox.removeAllViews()
         val values = recent()
         if (values.isEmpty()) return
-        recentBox.addView(caps("Recent", TEXT_3), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
+        recentBox.addView(caps(R.string.search_recent, TEXT_3), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
         values.chunked(2).forEach { pair ->
             val line = LinearLayout(this)
             pair.forEach { query ->
@@ -454,7 +440,7 @@ class SearchActivity : Screen() {
                     maxWidth = dp(110)
                     maxLines = 1
                     ellipsize = TextUtils.TruncateAt.END
-                    contentDescription = "$query. Hold OK to remove from recent searches"
+                    contentDescription = getString(R.string.search_recent_hint, query)
                     setOnClickListener {
                         input.setText(query)
                         input.setSelection(query.length)
@@ -462,7 +448,8 @@ class SearchActivity : Screen() {
                         search(true)
                     }
                     setOnLongClickListener {
-                        choose("Remove recent search?", listOf("Remove $query", "Cancel")) { picked ->
+                        choose(getString(R.string.search_remove_recent),
+                            listOf(getString(R.string.search_remove_query, query), getString(R.string.action_cancel))) { picked ->
                             if (picked == 0) {
                                 getSharedPreferences("search", MODE_PRIVATE).edit()
                                     .putString(recentKey(), recent().filterNot { it == query }.joinToString("\n")).apply()
@@ -475,7 +462,7 @@ class SearchActivity : Screen() {
             }
             recentBox.addView(line, LinearLayout.LayoutParams(-1, dp(27)))
         }
-        recentBox.addView(text("Hold OK to remove", SMALL, color = TEXT_3),
+        recentBox.addView(text(R.string.search_hold_to_remove, SMALL, color = TEXT_3),
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
     }
 
@@ -508,8 +495,8 @@ class SearchActivity : Screen() {
                 val titles = answer.getOrNull().orEmpty()
                 if (titles.isEmpty()) {
                     results.removeAllViews()
-                    results.addView(failed("Popular titles are unavailable.") { search(false) })
-                } else render(linkedMapOf("Popular" to titles), "", false)
+                    results.addView(failed(getString(R.string.search_popular_unavailable)) { search(false) })
+                } else render(linkedMapOf(getString(R.string.search_popular) to titles), "", false)
             }
             return
         }
@@ -517,7 +504,7 @@ class SearchActivity : Screen() {
             if (token != request) return@background
             val addons = loaded.getOrElse {
                 results.removeAllViews()
-                results.addView(failed("Search is unavailable right now.") { search(false) })
+                results.addView(failed(getString(R.string.search_unavailable)) { search(false) })
                 return@background
             }
             val answers = arrayOfNulls<List<Meta>>(addons.size)
@@ -531,14 +518,14 @@ class SearchActivity : Screen() {
                     .filterNot { isAddonMessage(it.name) }
                     .distinctBy { it.type to it.id }
                 val ranked = rankSearchTitles(found, query) { it.name }
-                val sections = linkedMapOf("Movies" to ranked.filter { it.type == "movie" }.take(PER_TYPE),
-                    "Shows" to ranked.filter { it.type == "series" }.take(PER_TYPE)).filterValues { it.isNotEmpty() }
+                val sections = linkedMapOf(getString(R.string.tab_movies) to ranked.filter { it.type == "movie" }.take(PER_TYPE),
+                    getString(R.string.tab_shows) to ranked.filter { it.type == "series" }.take(PER_TYPE)).filterValues { it.isNotEmpty() }
                 if (sections.isNotEmpty()) render(sections, query, moveFocus && (final || completed == addons.size))
                 else if (final || completed == addons.size) {
                     results.removeAllViews()
                     results.addView(if (failedCount == completed && (completed > 0 || final))
-                        failed("Search is unavailable right now.") { search(false) }
-                    else text("No matches · Try a shorter title", BODY, color = TEXT_2))
+                        failed(getString(R.string.search_unavailable)) { search(false) }
+                    else text(R.string.search_no_matches, BODY, color = TEXT_2))
                     resultCount.text = ""
                 }
             }
@@ -570,10 +557,10 @@ class SearchActivity : Screen() {
         firstResult = null
         results.removeAllViews()
         val total = sections.values.sumOf { it.size }
-        resultCount.text = if (total == 0 || query.isEmpty()) "" else if (total == 1) "1 title" else "$total titles" // not for Popular
+        resultCount.text = if (total == 0 || query.isEmpty()) "" else plural(R.plurals.search_titles, total) // not for Popular
         if (total == 0) {
             hero.visibility = View.INVISIBLE
-            results.addView(text("No matches · Try a shorter title", BODY, color = TEXT_2))
+            results.addView(text(R.string.search_no_matches, BODY, color = TEXT_2))
             return
         }
         sections.forEach { (label, list) ->
@@ -733,11 +720,9 @@ class SearchActivity : Screen() {
 
     private companion object {
         const val RECENT = 6
-        const val LEFT_SHADE = 0.85f // the left shade's strength behind the field and keyboard
         const val PER_TYPE = 12
         const val TYPING_PAUSE = 500L
         const val SEARCH_WAIT = 6000L
-        const val SPEECH = 31
         val searchPool = Images.newestFirst(8)
     }
 }

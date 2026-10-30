@@ -19,6 +19,7 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/logo"
         android:theme="@style/Alder"
+        android:localeConfig="@xml/locales_config"
         android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="false">
         <!-- Plain http:// as Stremio allows it: self-hosted add-ons (http://192.168.…:7000), debrid proxies and IPTV

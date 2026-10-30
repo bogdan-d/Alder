@@ -17,6 +17,7 @@ object WatchNext {
     private const val ART_PX = 1280 // the launcher's cards are a few hundred px wide; TMDB's 4K original is wasted there
 
     fun sync(context: Context, authKey: String, items: List<JSONObject>, locked: Boolean) = runCatching {
+        if (android.os.Build.VERSION.SDK_INT < 26) return@runCatching
         val resolver = context.contentResolver
         resolver.query(TvContract.WatchNextPrograms.CONTENT_URI, arrayOf(WatchNextPrograms._ID), null, null, null)?.use { c ->
             while (c.moveToNext()) resolver.delete(TvContract.buildWatchNextProgramUri(c.getLong(0)), null, null)
@@ -65,7 +66,18 @@ object WatchNext {
         Stremio.addons(authKey).let { it.savedMeta(type, id) ?: it.meta(type, id) }?.background
     }.getOrNull()
 
-    private fun lastWatched(state: JSONObject): Long = runCatching {
-        java.time.Instant.parse(state.optString("lastWatched")).toEpochMilli()
+    fun parseIsoTimestamp(raw: String): Long = runCatching {
+        if (raw.isBlank()) return@runCatching System.currentTimeMillis()
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            java.time.Instant.parse(raw).toEpochMilli()
+        } else {
+            val clean = if (raw.contains('.')) raw.substringBefore('.') + "Z" else raw
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.parse(clean)!!.time
+        }
     }.getOrDefault(System.currentTimeMillis())
+
+    internal fun lastWatched(state: JSONObject): Long =
+        parseIsoTimestamp(state.optString("lastWatched"))
 }

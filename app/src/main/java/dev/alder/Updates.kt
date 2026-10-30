@@ -16,7 +16,7 @@ import java.net.URL
  */
 object Updates {
     private const val LATEST = "https://api.github.com/repos/bogdan-d/Alder/releases/latest"
-    private const val DAY = 24 * 3600_000L
+    private const val CHECK_INTERVAL = 4 * 3600_000L // 4 hours instead of once a day
 
     class Release(val version: String, val apk: String)
 
@@ -32,11 +32,29 @@ object Updates {
                 .firstOrNull { it.optString("name").endsWith(".apk") }?.optString("browser_download_url") ?: return null
             Release(json.getString("tag_name").removePrefix("v"), apk)
         }
-        release.also { prefs(c).edit().putLong("checked", System.currentTimeMillis()).apply() }
+        release.also {
+            val editor = prefs(c).edit().putLong("checked", System.currentTimeMillis())
+            if (newerVersion(it.version, mine(c))) {
+                editor.putString("available_version", it.version).putString("available_apk", it.apk)
+            } else {
+                editor.remove("available_version").remove("available_apk")
+            }
+            editor.apply()
+        }
     }.onFailure { android.util.Log.w("Alder", "update check failed: $it") }.getOrNull()
 
-    /** A day since the last check: Home asks once a day, Settings whenever it's opened. */
-    fun due(c: Context) = System.currentTimeMillis() - prefs(c).getLong("checked", 0) > DAY
+    /** 4 hours since the last check: Home checks in the background; Settings checks whenever opened. */
+    fun due(c: Context) = System.currentTimeMillis() - prefs(c).getLong("checked", 0) > CHECK_INTERVAL
+
+    /** The cached available newer release, or null if up-to-date or none found yet. Synchronous. */
+    fun available(c: Context): Release? {
+        val ver = prefs(c).getString("available_version", null) ?: return null
+        val apk = prefs(c).getString("available_apk", null) ?: return null
+        return if (newerVersion(ver, mine(c))) Release(ver, apk) else null
+    }
+
+    /** True when a newer release is waiting to be installed. Synchronous. */
+    fun hasUpdate(c: Context): Boolean = available(c) != null
 
     /** Home offers each new version once; Settings always shows it. */
     fun offerOnce(c: Context, version: String): Boolean {
@@ -45,15 +63,25 @@ object Updates {
         return true
     }
 
-    fun canInstall(c: Context) = c.packageManager.canRequestPackageInstalls()
+    fun canInstall(c: Context): Boolean =
+        if (Build.VERSION.SDK_INT >= 26) c.packageManager.canRequestPackageInstalls()
+        else try {
+            @Suppress("DEPRECATION")
+            android.provider.Settings.Secure.getInt(c.contentResolver, android.provider.Settings.Secure.INSTALL_NON_MARKET_APPS) == 1
+        } catch (_: Exception) { true }
 
     /**
      * Opens Android's page for letting Alder install apps. False when this TV has no such page (some Fire TV models
      * keep it under Developer options instead): starting it there crashed Alder.
      */
     fun askToInstall(c: Context): Boolean = try {
-        c.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            android.net.Uri.parse("package:${c.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        if (Build.VERSION.SDK_INT >= 26) {
+            c.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                android.net.Uri.parse("package:${c.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } else {
+            c.startActivity(Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+
         true
     } catch (e: RuntimeException) { // ActivityNotFoundException, or a SecurityException from a locked-down settings app
         android.util.Log.w("Alder", "no install permission page: $e")

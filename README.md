@@ -81,7 +81,7 @@ Alder has no add-on store. Setting up add-ons means typing and web forms, which 
 
 ## Requirements
 
-- Android TV or Google TV running **Android 8.0 (Oreo) or newer**
+- Android TV, Google TV, or Fire TV running **Android 6.0 (Marshmallow, Fire OS 6) or newer**
 - A Stremio account with **debrid** stream add-ons (for example AIOStreams with Real-Debrid), set up in Stremio on your phone or computer
 - A way to sideload an APK: the *Downloader* app, a USB drive with a file manager, or `adb`
 

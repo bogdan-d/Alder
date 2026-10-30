@@ -118,7 +118,7 @@ class ProfilesActivity : Screen() {
         }
         profiles.forEach { p ->
             val signedOut = Profiles.signedOut(this, p.id).takeIf { it }
-                ?.let { text("Sign in again", SMALL, color = TUNGSTEN).apply { gravity = Gravity.CENTER } }
+                ?.let { text(R.string.profiles_sign_in_again, SMALL, color = TUNGSTEN).apply { gravity = Gravity.CENTER } }
             tiles.addView(tile(p, signedOut) { focus(p) }.apply {
                 setOnClickListener { enter(p) }
                 setOnLongClickListener { showMenu(p); true }
@@ -148,15 +148,15 @@ class ProfilesActivity : Screen() {
             }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
                 rightMargin = dp(PAD); topMargin = dp(39)
             })
-            addView(text("Who's here tonight?", 38f, serif = true).onArt().apply { gravity = Gravity.CENTER },
+            addView(text(R.string.profiles_whos_here, 38f, serif = true).onArt().apply { gravity = Gravity.CENTER },
                 FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { topMargin = dp(118) })
             addView(tiles, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply { topMargin = dp(190 - LIFT_ROOM) })
-            addView(chip("Manage profiles").apply {
+            addView(chip(R.string.manage_profiles).apply {
                 setOnClickListener {
-                    choose("Manage profiles", profiles.map { it.name }) { i -> showMenu(profiles[i]) }
+                    choose(getString(R.string.manage_profiles), profiles.map { it.name }) { i -> showMenu(profiles[i]) }
                 }
             }, FrameLayout.LayoutParams(-2, dp(30), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(50) })
-            addView(keyHint("Hold OK", "Rename · PIN · Colour · Remove"),
+            addView(keyHint(getString(R.string.profiles_hold_ok), getString(R.string.profiles_hold_ok_does)),
                 FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(20) })
         }
         setWindowed(content, art)
@@ -183,7 +183,7 @@ class ProfilesActivity : Screen() {
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(TUNGSTEN) }
             visibility = View.INVISIBLE
         }
-        val name = text(if (add) "Add" else profile?.name.orEmpty().replaceFirstChar { it.titlecase() } + if (profile?.pin != null) "  🔒" else "",
+        val name = text(if (add) getString(R.string.action_add) else profile?.name.orEmpty().replaceFirstChar { it.titlecase() } + if (profile?.pin != null) "  🔒" else "",
             BODY, color = TEXT_2).apply { gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         return column(Gravity.CENTER_HORIZONTAL).apply {
             addView(circle, LinearLayout.LayoutParams(dp(112), dp(112)))
@@ -206,18 +206,19 @@ class ProfilesActivity : Screen() {
 
     private fun showMenu(p: Profile) {
         val items = listOfNotNull(
-            "Rename" to { withPin(p) { rename(p) } },
-            (if (p.pin == null) "Set a PIN" else "Change PIN") to { withPin(p) { setPin(p) } },
-            "Colour" to { withPin(p) {
-                choose("${p.name}'s portrait", listOf("Tungsten", "Clay", "Sage", "Lavender", "Honey"),
+            getString(R.string.profiles_rename) to { withPin(p) { rename(p) } },
+            getString(if (p.pin == null) R.string.profiles_set_pin else R.string.profiles_change_pin) to { withPin(p) { setPin(p) } },
+            getString(R.string.profiles_colour) to { withPin(p) {
+                choose(getString(R.string.profiles_portrait, p.name), listOf(R.string.colour_tungsten, R.string.colour_clay,
+                    R.string.colour_sage, R.string.colour_lavender, R.string.colour_honey).map(::getString),
                     checked = Profiles.COLORS.indexOf(p.color)) { i ->
                     Profiles.update(this, p.id, color = Profiles.COLORS[i]); showPicker()
                 }
             } },
-            if (p.pin == null) null else "Remove PIN" to {
+            if (p.pin == null) null else getString(R.string.profiles_remove_pin) to {
                 withPin(p) { Profiles.update(this, p.id, clearPin = true); showPicker() }
             },
-            "Remove profile" to { withPin(p) { showPicker(); confirmRemove(p) } },
+            getString(R.string.profiles_remove) to { withPin(p) { showPicker(); confirmRemove(p) } },
         )
         choose(p.name, items.map { it.first }) { i -> items[i].second() }
     }
@@ -225,12 +226,12 @@ class ProfilesActivity : Screen() {
     /** Runs [then] straight away, or once the profile's PIN is typed, so a locked profile can't be changed around it. */
     private fun withPin(p: Profile, then: () -> Unit) {
         val pin = p.pin ?: return then()
-        askPin("Enter ${p.name}'s PIN", ::showPicker) { (it == pin).also { ok -> if (ok) then() } }
+        askPin(getString(R.string.profiles_enter_pin, p.name), ::showPicker) { (it == pin).also { ok -> if (ok) then() } }
     }
 
     private fun setPin(p: Profile) {
-        askPin("Choose a PIN for ${p.name}", ::showPicker) { first ->
-            askPin("Enter it again", ::showPicker, "PINs don't match. Try again.") { second ->
+        askPin(getString(R.string.profiles_choose_pin, p.name), ::showPicker) { first ->
+            askPin(getString(R.string.profiles_pin_again), ::showPicker, getString(R.string.profiles_pin_mismatch)) { second ->
                 (second == first).also { same ->
                     if (same) { Profiles.update(this, p.id, pin = first); showPicker() }
                 }
@@ -250,24 +251,24 @@ class ProfilesActivity : Screen() {
             avatar.text = typed.firstOrNull()?.uppercase().orEmpty()
             error.text = ""
         }
-        val save = onboardingButton("Save")
+        val save = onboardingButton(getString(R.string.profiles_save))
         val go = {
             name.text.toString().trim().takeIf { it.isNotEmpty() }
                 ?.let { Profiles.update(this, p.id, name = it); showPicker() }
-                ?: run { error.text = "Enter a name to save." }
+                ?: run { error.text = getString(R.string.profiles_name_to_save) }
         }
         name.setOnEditorActionListener { _, _, _ -> go(); true }
         save.setOnClickListener { go() }
         val copy = column(Gravity.START,
-            text("Rename ${p.name}", SERIF_TITLE, serif = true),
-            text("History and add-ons stay as they are.", BODY, color = TEXT_2).marginTop(4),
+            text(getString(R.string.profiles_rename_title, p.name), SERIF_TITLE, serif = true),
+            text(R.string.profiles_rename_desc, BODY, color = TEXT_2).marginTop(4),
             name.apply { layoutParams = LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(16) } },
             keyboard.apply { layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) } },
             error.marginTop(5),
             save.marginTop(7),
         ).apply { gravity = Gravity.CENTER_VERTICAL }
         val preview = column(Gravity.CENTER, avatar, previewName.marginTop(16)).apply { gravity = Gravity.CENTER }
-        setWindowed(onboardingFrame("", copy, preview, dp(65), 1.05f, 0.95f), onboardingBackdrop())
+        setWindowed(onboardingFrame("", 0, 0, copy, preview, dp(65), 1.05f, 0.95f), onboardingBackdrop())
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         firstKey.requestFocus()
     }
@@ -276,7 +277,7 @@ class ProfilesActivity : Screen() {
      * Four digit boxes for a TV remote: Up/Down turn the focused digit, Left/Right move between boxes, number keys
      * type and move on. OK (or the fourth number key) hands the PIN to [check]; false shakes the boxes and clears them.
      */
-    private fun askPin(title: String, back: () -> Unit, errorMessage: String = "Incorrect PIN. Try again.", check: (String) -> Boolean) {
+    private fun askPin(title: String, back: () -> Unit, errorMessage: String = getString(R.string.profiles_pin_wrong), check: (String) -> Boolean) {
         backTo = back
         val digits = IntArray(4) { -1 }
         var at = 0
@@ -330,15 +331,15 @@ class ProfilesActivity : Screen() {
             text(title, SERIF_TITLE, bold = true, serif = true),
             row.marginTop(36),
             error.marginTop(12),
-            text("▲ ▼ change a digit    ◀ ▶ move    OK to confirm", SMALL, color = TEXT_2).marginTop(28),
+            text(R.string.profiles_pin_keys, SMALL, color = TEXT_2).marginTop(28),
         ).apply { gravity = Gravity.CENTER }
         setWindowed(content, onboardingBackdrop())
         row.requestFocus()
     }
 
     private fun confirmRemove(p: Profile) {
-        choose("Remove ${p.name}?", listOf("Cancel", "Remove"),
-            "This signs ${p.name} out on this TV. Their Stremio account, history and addons stay as they are.") { i ->
+        choose(getString(R.string.profiles_remove_title, p.name), listOf(getString(R.string.action_cancel), getString(R.string.action_remove)),
+            getString(R.string.profiles_remove_desc, p.name)) { i ->
             if (i == 0) return@choose
             Profiles.remove(this, p.id)
             background({ Http.forget() }) {}
@@ -364,11 +365,11 @@ class ProfilesActivity : Screen() {
             avatar.text = typed.firstOrNull()?.uppercase().orEmpty()
             error.text = ""
         }
-        val next = onboardingButton("Continue    →")
+        val next = onboardingButton(getString(R.string.profiles_continue))
         val go = {
             name.text.toString().trim().takeIf { it.isNotEmpty() }?.replaceFirstChar { it.titlecase() }
                 ?.let { draftName = it; showSignIn(it) }
-                ?: run { error.text = "Enter a name to continue." }
+                ?: run { error.text = getString(R.string.profiles_name_to_continue) }
         }
         name.setOnEditorActionListener { _, _, _ -> go(); true }
         next.setOnClickListener { go() }
@@ -394,11 +395,11 @@ class ProfilesActivity : Screen() {
             swatches.addView(mark, LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(8) })
         }
         val copy = column(Gravity.START,
-            text(if (first) "Welcome to Alder" else "New profile", SERIF_TITLE, serif = true),
-            text("Give this profile a name and colour.", BODY, color = TEXT_2).marginTop(4),
+            text(if (first) R.string.profiles_welcome else R.string.profiles_new, SERIF_TITLE, serif = true),
+            text(R.string.profiles_name_colour, BODY, color = TEXT_2).marginTop(4),
             name.apply { layoutParams = LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(16) } },
             keyboard.apply { layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) } },
-            caps("Portrait colour", TUNGSTEN).marginTop(13),
+            caps(R.string.profiles_portrait_colour, TUNGSTEN).marginTop(13),
             swatches.marginTop(7),
             error.marginTop(5),
             next.marginTop(7),
@@ -407,7 +408,7 @@ class ProfilesActivity : Screen() {
             avatar,
             previewName.marginTop(16),
         ).apply { gravity = Gravity.CENTER }
-        val content = onboardingFrame(if (first) "step 1 of 2" else "step 1 of 3", copy, preview, dp(65), 1.05f, 0.95f)
+        val content = onboardingFrame(step(1, if (first) 2 else 3), 1, if (first) 2 else 3, copy, preview, dp(65), 1.05f, 0.95f)
         setWindowed(content, onboardingBackdrop())
         window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         firstKey.requestFocus()
@@ -419,7 +420,7 @@ class ProfilesActivity : Screen() {
      */
     private fun nameEntry(initial: String, changed: (String) -> Unit): Triple<EditText, View, View> {
         val name = EditText(this).apply {
-            hint = "Your name"
+            hint = getString(R.string.profiles_your_name)
             textSize = BODY
             setTextColor(TEXT)
             setHintTextColor(TEXT_3)
@@ -465,7 +466,7 @@ class ProfilesActivity : Screen() {
         }
         keyboard.addView(LinearLayout(this).apply {
             key("⇧", this) { caps(!upper) }
-            key("SPACE", this, 3) { name.text.append(" ") }
+            key(getString(R.string.search_space).uppercase(), this, 3) { name.text.append(" ") }
             key("⌫", this) { if (name.length() > 0) name.text.delete(name.length() - 1, name.length()) }
             key("⌨", this) {
                 name.showSoftInputOnFocus = true
@@ -494,7 +495,7 @@ class ProfilesActivity : Screen() {
         signingIn = true
         val request = ++signInGeneration
         val qr = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER }
-        val status = text("Getting a sign-in code…", SMALL, color = TEXT_2)
+        val status = text(R.string.profiles_getting_code, SMALL, color = TEXT_2)
         val countdown = ring(1f)
         val codeTiles = (0 until 4).map {
             text("–", 36f, bold = true).apply {
@@ -507,7 +508,7 @@ class ProfilesActivity : Screen() {
                 if (childCount > 0) marginStart = dp(7)
             }) }
         }
-        val back = chip("← Back")
+        val back = chip(R.string.profiles_back)
         back.setOnClickListener { waitingCode = null; if (again != null) showPicker() else showName() }
         val left = column(Gravity.CENTER,
             FrameLayout(this).apply {
@@ -526,11 +527,10 @@ class ProfilesActivity : Screen() {
             background = glass(14)
         }
         val steps = column(Gravity.START,
-            text(if (again != null) "Sign in again" else "Connect Stremio", 40f, serif = true).onArt(),
-            text(if (again != null) "Stremio signed $name out of this TV. Scan with $name's phone to connect again. $name's settings and PIN stay."
-                else "Scan with $name's phone. Stremio opens and asks to sign in this TV.", BODY).onArt().marginTop(10),
+            text(if (again != null) R.string.profiles_sign_in_again else R.string.profiles_connect, 40f, serif = true).onArt(),
+            text(getString(if (again != null) R.string.profiles_signed_out else R.string.profiles_scan, name), BODY).onArt().marginTop(10),
             text("", BODY, color = TEXT_2).onArt().apply {
-                val line = "Or go to link.stremio.com and enter"
+                val line = getString(R.string.profiles_or_go_to, "link.stremio.com")
                 val at = line.indexOf("link.stremio.com")
                 text = android.text.SpannableString(line).apply {
                     setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), at, at + 16, 0)
@@ -544,13 +544,13 @@ class ProfilesActivity : Screen() {
                 addView(status, wrap().apply { marginStart = dp(9) })
             }.marginTop(17),
             // Two people approving on one phone sign each other out: switching accounts there can end the other's sign-in.
-            text("Sharing a phone? Approve each person's code on their own phone or in a private browser window. Signing out of Stremio there can sign this TV out too.",
-                SMALL, color = TEXT_2).onArt().marginTop(24),
-            text("New to Stremio? Make an account and add your add-ons in the Stremio app or at web.stremio.com. Alder brings them to the TV.",
-                SMALL, color = TEXT_3).onArt().marginTop(10),
+            text(R.string.profiles_sharing_phone, SMALL, color = TEXT_2).onArt().marginTop(24),
+            text(R.string.profiles_new_to_stremio, SMALL, color = TEXT_3).onArt().marginTop(10),
         ).apply { gravity = Gravity.CENTER_VERTICAL }
         val first = Profiles.all(this).isEmpty()
-        val content = onboardingFrame(if (again != null) "sign in again" else if (first) "step 2 of 2" else "step 2 of 3", left, steps, dp(55), 0f, 1f, dp(300))
+        val total = if (again != null || first) 2 else 3
+        val content = onboardingFrame(if (again != null) getString(R.string.profiles_step_sign_in) else step(2, total),
+            if (again != null) 1 else 2, total, left, steps, dp(55), 0f, 1f, dp(300))
         content.addView(back, FrameLayout.LayoutParams(-2, dp(32), Gravity.BOTTOM or Gravity.START).apply {
             leftMargin = dp(PAD); bottomMargin = dp(40)
         })
@@ -567,7 +567,7 @@ class ProfilesActivity : Screen() {
                 fun tick() {
                     if (!signingIn || request != signInGeneration || waitingCode != link.code) return
                     val leftSeconds = ((5 * 60_000L - (SystemClock.elapsedRealtime() - started)).coerceAtLeast(0) / 1000).toInt()
-                    status.text = "Waiting for your phone · new code in ${leftSeconds / 60}:${"%02d".format(leftSeconds % 60)}"
+                    status.text = getString(R.string.profiles_waiting, "${leftSeconds / 60}:${"%02d".format(leftSeconds % 60)}")
                     countdown.progress = leftSeconds * 1000 / 300
                     main.postDelayed(::tick, 1_000)
                 }
@@ -575,7 +575,7 @@ class ProfilesActivity : Screen() {
                 tick()
                 poll(name, link.code, started, again)
             }.onFailure {
-                status.text = "Can't reach Stremio. Trying again…"
+                status.text = getString(R.string.profiles_unreachable)
                 main.postDelayed({ if (signingIn && request == signInGeneration) showSignIn(name, again) }, 5_000)
             }
         }
@@ -594,7 +594,11 @@ class ProfilesActivity : Screen() {
         }
     }
 
-    private fun onboardingFrame(step: String, left: View, right: View, gap: Int, leftWeight: Float, rightWeight: Float, leftWidth: Int = 0) =
+    /** "step 1 of 3", the words above the dots of a setup. */
+    private fun step(current: Int, total: Int) = getString(R.string.profiles_step, current, total)
+
+    private fun onboardingFrame(step: String, current: Int, total: Int, left: View, right: View, gap: Int, leftWeight: Float,
+                                rightWeight: Float, leftWidth: Int = 0) =
         android.widget.FrameLayout(this).apply {
             val body = LinearLayout(this@ProfilesActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -606,14 +610,12 @@ class ProfilesActivity : Screen() {
                 addView(right, LinearLayout.LayoutParams(0, -1, rightWeight))
             }
             addView(body, android.widget.FrameLayout.LayoutParams(-1, -1))
-            val current = step.substringAfter("step ").substringBefore(" of ").toIntOrNull() ?: 1
-            val total = step.substringAfter(" of ").toIntOrNull() ?: 2
             addView(LinearLayout(this@ProfilesActivity).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(PAD), dp(31), dp(PAD), 0)
                 addView(brand(), LinearLayout.LayoutParams(0, -2, 1f))
                 if (step.isEmpty()) return@apply // a profile's own screens (rename) aren't part of a setup
-                addView(text((if (total > 2) "New profile · " else "Welcome · ") + step, SMALL, color = TEXT_2))
+                addView(text(getString(if (total > 2) R.string.profiles_step_new else R.string.profiles_step_welcome, step), SMALL, color = TEXT_2))
                 repeat(total) { index -> addView(View(this@ProfilesActivity).apply {
                     background = GradientDrawable().apply {
                         shape = GradientDrawable.OVAL; setColor(if (index < current) TUNGSTEN else GLASS_EDGE)
@@ -667,9 +669,9 @@ class ProfilesActivity : Screen() {
             }
         }) { result ->
             val same = result.getOrNull() ?: return@background signedIn(name, key, again) // unknown: don't hold anyone up
-            choose("This is ${same.name}'s Stremio account", listOf("Use another account", "Continue anyway"),
-                "Approve the code with $name's own account: on $name's phone, or in a private browser window. " +
-                    "Signing out of Stremio on the phone can sign ${same.name} out of this TV.") { i ->
+            choose(getString(R.string.profiles_same_account, same.name),
+                listOf(getString(R.string.profiles_other_account), getString(R.string.profiles_continue_anyway)),
+                getString(R.string.profiles_same_account_desc, name, same.name)) { i ->
                 if (i == 0) showSignIn(name, again) else signedIn(name, key, again)
             }
         }
@@ -701,16 +703,13 @@ class ProfilesActivity : Screen() {
             ?: return showReady(profile)
         val configure = Uri.parse(watchly.transportUrl).let { "${it.scheme}://${it.authority}/configure" }
         val qr = ImageView(this).apply { setImageBitmap(qrBitmap(configure, dp(220))) }
-        val done = onboardingButton("Continue to Alder").apply { setOnClickListener { openHome(profile) } }
+        val done = onboardingButton(getString(R.string.profiles_continue_to_alder)).apply { setOnClickListener { openHome(profile) } }
         val steps = column(Gravity.START,
-            text("Recommendations for ${profile.name}", SERIF_TITLE, bold = true, serif = true),
-            text("1.  Scan with ${profile.name}'s phone to open Watchly\n" +
-                "2.  Connect ${profile.name}'s Stremio account there\n" +
-                "3.  Install it to ${profile.name}'s Stremio account\n\n" +
-                "${profile.name}'s own \"Top Picks\" then show up on Home. You can finish this later.", BODY, color = TEXT_3).marginTop(16),
+            text(getString(R.string.profiles_recommendations, profile.name), SERIF_TITLE, bold = true, serif = true),
+            text(getString(R.string.profiles_watchly_steps, profile.name), BODY, color = TEXT_3).marginTop(16),
             done.marginTop(32),
         )
-        setWindowed(onboardingFrame("step 3 of 3", column(Gravity.CENTER,
+        setWindowed(onboardingFrame(step(3, 3), 3, 3, column(Gravity.CENTER,
             qr.apply { background = rounded(TEXT, 12) },
             text(profile.name, BODY, bold = true).marginTop(12)
         ).apply { gravity = Gravity.CENTER; setPadding(dp(22), dp(22), dp(22), dp(22)); background = glass(14) },
@@ -720,13 +719,13 @@ class ProfilesActivity : Screen() {
 
     private fun showReady(profile: Profile) {
         backTo = { openHome(profile) }
-        val done = onboardingButton("Continue to Alder").apply { setOnClickListener { openHome(profile) } }
-        setWindowed(onboardingFrame("step 3 of 3", column(Gravity.CENTER,
+        val done = onboardingButton(getString(R.string.profiles_continue_to_alder)).apply { setOnClickListener { openHome(profile) } }
+        setWindowed(onboardingFrame(step(3, 3), 3, 3, column(Gravity.CENTER,
             onboardingAvatar(profile.name.take(1).uppercase(), 100, profile.color),
             text(profile.name, SERIF_TITLE, serif = true).marginTop(12)
         ).apply { gravity = Gravity.CENTER }, column(Gravity.START,
-            text("You're all set", 40f, serif = true),
-            text("${profile.name}'s profile is ready. You can add more add-ons later in Settings.", BODY, color = TEXT_2).marginTop(12),
+            text(R.string.profiles_all_set, 40f, serif = true),
+            text(getString(R.string.profiles_ready, profile.name), BODY, color = TEXT_2).marginTop(12),
             done.marginTop(24)
         ).apply { gravity = Gravity.CENTER_VERTICAL }, dp(55), 0.9f, 1.1f), onboardingBackdrop())
         done.requestFocus()
