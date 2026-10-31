@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1536, initial-scale=1">
+  <title>Alder portfolio card</title>
+  <style>
+    @font-face {
+      font-family: Inter;
+      src: url("../../app/src/main/assets/fonts/inter.ttf") format("truetype");
+    }
+
+    @font-face {
+      font-family: Instrument Serif;
+      src: url("../../app/src/main/assets/fonts/instrument_serif.ttf") format("truetype");
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 1536px;
+      height: 1024px;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    body {
+      position: relative;
+      color: #f3eee6;
+      background:
+        radial-gradient(ellipse 690px 620px at 81% 53%, #322319 0%, #14100e 49%, transparent 88%),
+        radial-gradient(ellipse 540px 470px at 3% 3%, #1d1712 0%, transparent 76%),
+        #080808;
+      font-family: Inter, Arial, sans-serif;
+    }
+
+    .brand {
+      position: absolute;
+      top: 100px;
+      left: 84px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 122px;
+    }
+
+    .brand svg { width: 114px; height: 114px; flex: none; }
+
+    .brand-name {
+      margin-top: -3px;
+      font-family: "Instrument Serif", Georgia, serif;
+      font-size: 65px;
+      line-height: 1;
+    }
+
+    .eyebrow {
+      position: absolute;
+      top: 260px;
+      left: 96px;
+      color: #e1c7a4;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      position: absolute;
+      top: 326px;
+      left: 86px;
+      width: 514px;
+      margin: 0;
+      font-size: 93px;
+      font-weight: 500;
+      letter-spacing: -.065em;
+      line-height: 1.06;
+    }
+
+    .description {
+      position: absolute;
+      top: 585px;
+      left: 96px;
+      width: 455px;
+      margin: 0;
+      color: #aaa5a0;
+      font-size: 29px;
+      line-height: 1.42;
+      letter-spacing: -.025em;
+    }
+
+    .platforms {
+      position: absolute;
+      bottom: 91px;
+      left: 96px;
+      color: #c7b69f;
+      font-size: 21px;
+      font-weight: 500;
+      letter-spacing: .015em;
+    }
+
+    .screen {
+      position: absolute;
+      top: 183px;
+      left: 617px;
+      width: 1210px;
+      height: 699px;
+      padding: 15px;
+      overflow: hidden;
+      border: 2px solid #39332f;
+      border-radius: 31px;
+      background: #111;
+      box-shadow: 0 0 0 1px #090909, 0 32px 95px #000c, -18px 0 72px #0008;
+    }
+
+    .screen img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      border-radius: 16px;
+      object-fit: cover;
+    }
+
+    .screen::after {
+      position: absolute;
+      inset: 15px;
+      content: "";
+      border-radius: 16px;
+      box-shadow: inset 0 0 0 1px #ffffff0c;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="brand" aria-label="Alder">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+      <path fill="#F3EEE6" d="M 217 104 Q 220 97 226 97 L 263 97 Q 269 97 272 104 L 407 389 Q 411 398 402 398 L 335 398 Q 331 398 328 391 L 228 182 L 205 233 Q 203 238 196 238 L 168 238 Q 161 238 165 230 Z"/>
+      <path fill="#F3D9B1" d="M 109 270 Q 109 262 116 266 L 188 308 Q 196 313 188 318 L 116 360 Q 109 364 109 356 Z"/>
+    </svg>
+    <span class="brand-name">Alder</span>
+  </div>
+
+  <div class="eyebrow">Stremio for the living room</div>
+  <h1>Press play.<br>It plays.</h1>
+  <p class="description">No stream lists to decode. Just choose a film and watch.</p>
+  <div class="platforms">Android TV &nbsp;·&nbsp; Google TV &nbsp;·&nbsp; Fire TV</div>
+
+  <div class="screen">
+    <img src="../../docs/home-dune.png" alt="Alder home screen">
+  </div>
+</body>
+</html>

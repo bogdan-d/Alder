@@ -14,5 +14,6 @@ SPEC.md
 /*.png
 /alder-tv-*
 /promo/
+/site/dist/
 hs_err_pid*.log
 replay_pid*.log

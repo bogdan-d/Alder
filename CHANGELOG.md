@@ -18,6 +18,20 @@ Put changes that are not released under `## Unreleased`. Before each release, re
 ## Unreleased
 
 ### New
+- **Alder website.** The House Lights website shows the TV app, setup steps, and a link to the latest APK.
+- Add an Alder website card image with the app screen and product text.
+
+### Easier to use
+- **Alder website.** The site shows the app screens and makes the download and setup steps easy to find.
+
+## 1.3.1
+
+### Fixes
+- **Alder.apk download.** The release file uses the Alder.apk name.
+
+## 1.3
+
+### New
 <!-- Spotlight -->
 - **Alder in your language.** Alder shows menus, buttons and settings in Spanish, Portuguese, French, German, Hindi or Italian. Alder uses the TV language. To change it, select **Settings → Language → App language**.
 <!-- Spotlight -->
@@ -46,7 +60,7 @@ Put changes that are not released under `## Unreleased`. Before each release, re
 
 ### Easier to use
 <!-- Spotlight -->
-- **House Lights logos.** Alder uses the tungsten mark on the TV banner, transparent app icon, and small transparent logo.
+- **House Lights logos.** Alder uses the tungsten mark on the TV banner, transparent app icon, and small transparent logo. The profile picker and Settings headers use vector art.
 - **Content ratings on the title page.** A badge shows the content rating, for example PG-13, R, or TV-MA, before the year.
 - **Compact Up next prompt.** The Up next card uses a smaller width, smaller text, and a single Next episode button.
 - **QWERTY Search keys.** The Search keyboard uses QWERTY letter rows. The microphone icon stays dim until voice search is available.
@@ -61,7 +75,7 @@ Put changes that are not released under `## Unreleased`. Before each release, re
 - **Cinematic video start.** When you select Play, Alder shows the title art and bottom controls immediately. The progress bar pulses with warm light while Alder connects to the source, and the video fades in smoothly.
 - **Format and debrid badges in the player.** Open the player controls to see badges for resolution, Dolby Vision, HDR, Dolby Atmos, DTS, audio language, subtitles, and your debrid service below the title.
 - **Faster access to Audio & subtitles.** Press Left once from Play / Pause in the player to open **Audio & subtitles**.
-- **Live subtitle sync.** Adjust subtitle timing with Left and Right while the video plays. This works for embedded subtitles and add-on subtitles.
+- **Live subtitle sync.** Adjust subtitle delay with Left and Right while the video plays. This works for embedded subtitles and add-on subtitles.
 - **Close player controls.** Press Back to close the controls while the video plays. Press Back again to leave the player.
 - **Exact subtitle remembered.** When you play a video again, Alder uses the exact subtitle track that you selected before.
 - **Update notification dot.** A dot on your profile avatar shows when a new version of Alder is ready.
@@ -69,10 +83,10 @@ Put changes that are not released under `## Unreleased`. Before each release, re
 - **Faster update checks.** Alder checks for new releases every 4 hours instead of once a day.
 
 ### Fixes
-- **Subtitle language list in Audio & subtitles.** All add-on subtitle languages now appear immediately under Subtitles. Quick timing sits below the language list so remote focus moves smoothly.
-- **Up next episode card timing.** When credit timing is present, Alder shows Up next only after the credits start. Fallback window now triggers during the final 15 to 25 seconds instead of a minute early.
-- **Skip intro button timing.** Alder reads MKV intro chapters first. Alder filters low confidence IntroDB segments and stops false zero second prompts when cold opens exist.
-- **Remote focus and scrolling in Audio & subtitles.** Selecting an audio or subtitle track keeps remote focus on the selected track and does not reset the scroll position. Scrolling between tracks operates smoothly and clips cleanly within the scroll viewport.
+- **Subtitle language list in Audio & subtitles.** All add-on subtitle languages appear under Subtitles. Quick sync sits below the list so remote focus moves smoothly.
+- **Up next episode card.** When credit times are available, Alder shows Up next only after the credits start. The fallback starts in the final 15 to 25 seconds.
+- **Skip intro button.** Alder reads MKV intro chapters first. Alder filters IntroDB segments with low confidence and stops false prompts at the start of a video.
+- **Remote focus and scroll in Audio & subtitles.** When you select a track, remote focus stays on it and the list keeps its position. The list moves smoothly and stays in its panel.
 - **Smoked glass overlay in Audio & subtitles.** The Audio & subtitles sheet uses the Alder smoked glass recipe for high contrast over video.
 - **Cleaner title page.** The light around **Play** and **Resume** sits in the center. Cast names stay inside the screen margins. Action buttons align in the center.
 - **Install on Fire TV.** Alder installs on Fire TV and Fire OS devices without a package parse error.
