@@ -9,6 +9,7 @@ Upstream is merged into `main` regularly, so every fork change is a future merge
 Fork-only changes so far:
 
 - `Updates.kt`: `LATEST` points at this fork's releases. Merges from upstream must keep this line.
+- `res/drawable-anydpi-v26/logo.xml` and `res/drawable-nodpi/logo_foreground.webp`: an adaptive launcher icon (dark background) so Google TV doesn't show the transparent logo on white. Drop both if upstream adds its own adaptive icon.
 - `AGENTS.md`: this file.
 
 To sync: `git fetch upstream && git merge upstream/main`. Then build, and check that the `LATEST` line still points at the fork.
