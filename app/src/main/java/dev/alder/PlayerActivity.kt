@@ -31,6 +31,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import android.os.Looper
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.RendererCapabilities
@@ -38,12 +39,13 @@ import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.audio.AudioSink
-import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp3.Mp3Extractor
 import androidx.media3.ui.CaptionStyleCompat
@@ -165,6 +167,7 @@ internal data class PlayerBadge(val brand: BadgeBrand, val label: String, val co
 internal fun playerBadges(
     stream: Stream?,
     videoHeight: Int = 0,
+    videoWidth: Int = 0,
     audioLanguage: String? = null,
     audioMime: String? = null,
     audioLabel: String? = null,
@@ -173,25 +176,33 @@ internal fun playerBadges(
 ): List<PlayerBadge> {
     if (stream == null && videoHeight <= 0 && audioMime == null && audioLanguage == null && subtitleLanguage == null) return emptyList()
     val out = mutableListOf<PlayerBadge>()
-    val height = videoHeight.takeIf { it > 0 } ?: stream?.height ?: 0
+    // Widescreen films are stored without black bars (4K scope is 3840 x 1608), so the width's 16:9 height counts too.
+    val height = maxOf(videoHeight.takeIf { it > 0 } ?: stream?.height ?: 0, videoWidth * 9 / 16)
+    // Midway between sizes: a file cropped a few pixels (3836 or 1916 wide) keeps its class.
     when {
-        height >= 2160 -> out += PlayerBadge(BadgeBrand.NONE, "4K", accent = true)
-        height >= 1440 -> out += PlayerBadge(BadgeBrand.NONE, "1440p")
-        height >= 1080 -> out += PlayerBadge(BadgeBrand.NONE, "1080p")
-        height >= 720 -> out += PlayerBadge(BadgeBrand.NONE, "720p")
+        height >= 1800 -> out += PlayerBadge(BadgeBrand.NONE, "4K", accent = true)
+        height >= 1260 -> out += PlayerBadge(BadgeBrand.NONE, "1440p")
+        height >= 900 -> out += PlayerBadge(BadgeBrand.NONE, "1080p")
+        height >= 600 -> out += PlayerBadge(BadgeBrand.NONE, "720p")
         height >= 480 -> out += PlayerBadge(BadgeBrand.NONE, "${height}p")
     }
     if (stream?.dolbyVision == true) out += PlayerBadge(BadgeBrand.DOLBY, "VISION", accent = true)
     if (stream?.hdr == true && !stream.dolbyVision) out += PlayerBadge(BadgeBrand.NONE, "HDR", accent = true)
 
     val words = "${stream?.filename.orEmpty()} ${stream?.title.orEmpty()} ${stream?.description.orEmpty()} ${audioLabel.orEmpty()}".lowercase()
-    val atmos = audioMime == MimeTypes.AUDIO_E_AC3_JOC || "atmos" in words
-    val trueHd = audioMime == MimeTypes.AUDIO_TRUEHD || "truehd" in words
+    // The file name describes the main audio track. Once the playing track is known, the name only refines its own
+    // codec family (Matroska reports Atmos as plain E-AC-3, DTS-HD MA as DTS), so an AAC commentary is not "ATMOS".
+    val unknown = audioMime == null
+    val dolbyTrack = unknown || audioMime == MimeTypes.AUDIO_E_AC3 || audioMime == MimeTypes.AUDIO_E_AC3_JOC ||
+        audioMime == MimeTypes.AUDIO_TRUEHD
+    val dtsTrack = audioMime?.startsWith("audio/vnd.dts") == true
+    val atmos = audioMime == MimeTypes.AUDIO_E_AC3_JOC || (dolbyTrack && "atmos" in words)
+    val trueHd = audioMime == MimeTypes.AUDIO_TRUEHD || (unknown && "truehd" in words)
     val dolbyDigital = audioMime == MimeTypes.AUDIO_E_AC3 || audioMime == MimeTypes.AUDIO_AC3 ||
-        Regex("\\b(ddp?|e-?ac-?3|dolby.?digital)(\\b|\\d)").containsMatchIn(words)
-    val dtsX = Regex("dts[-_. ]?x\\b").containsMatchIn(words)
-    val dtsHd = audioMime == MimeTypes.AUDIO_DTS_HD || Regex("dts[-_. ]?hd").containsMatchIn(words)
-    val dts = audioMime == MimeTypes.AUDIO_DTS || Regex("\\bdts\\b").containsMatchIn(words)
+        (unknown && Regex("\\b(ddp?|e-?ac-?3|ac-?3|dolby.?digital)(\\b|\\d)").containsMatchIn(words))
+    val dtsX = (unknown || dtsTrack) && Regex("dts[-_.: ]?x\\b").containsMatchIn(words)
+    val dtsHd = audioMime == MimeTypes.AUDIO_DTS_HD || ((unknown || dtsTrack) && Regex("dts[-_.: ]?hd").containsMatchIn(words))
+    val dts = dtsTrack || (unknown && Regex("\\bdts\\b").containsMatchIn(words))
 
     when {
         atmos -> out += PlayerBadge(BadgeBrand.DOLBY, "ATMOS", accent = true)
@@ -253,6 +264,7 @@ internal class OffsettableTextRenderer(
 // It gets a short list of sources: one that fails, or hasn't shown a picture after START_WAIT, gives way to the next
 // at the same second, and when the list runs out the sources page opens. Network blips are retried first, twice
 // after 1.5 s (NuvioTV's rule), so a dropped connection doesn't cost the source.
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlayerActivity : Screen() {
     private lateinit var player: ExoPlayer
     private lateinit var view: PlayerView
@@ -261,9 +273,9 @@ class PlayerActivity : Screen() {
     private val videoId by lazy { intent.getStringExtra("videoId")!! }
     private val isTrailer by lazy { intent.getBooleanExtra("isTrailer", false) }
 
-    // The title's library item. Null when it couldn't be loaded: then nothing is saved, rather than
-    // overwriting real history with a blank item.
     private var item: JSONObject? = null
+    private var provisionalProgress = false
+    private var lastSourceFailure: Failure? = null
     private var lastPosition = 0L
     private var ticks = 0
 
@@ -277,8 +289,17 @@ class PlayerActivity : Screen() {
     private var started = false // a picture has shown
     private var startMessage: String? = null
     private var watched = false // any source showed a picture this time: only then is progress saved
+    private var handedOff = false // this source went to another video app (Settings › Video player)
     private var startAt = 0L
     private var prepared = false
+    private var stopped = false // Alder is behind another app: a late load must not start the sound
+    // The current source's link (Stream.open), the source it belongs to, and the one still opening (a torrent's engine).
+    private var opened: Opened? = null
+    private var openedFor: Stream? = null
+    private var opening: Stream? = null
+    private var startWait = START_WAIT
+    // Stremio's resume point when it differs from the TV's copy; used once the picture shows and the file can seek.
+    private var lateResume: Long? = null
     private lateinit var status: android.widget.TextView
     private lateinit var loading: FrameLayout
     private lateinit var stallPanel: FrameLayout
@@ -289,6 +310,7 @@ class PlayerActivity : Screen() {
     private var addonSubs: List<Subtitle> = emptyList()
     private var refreshOptionsSubtitles: (() -> Unit)? = null
     private var chosenSub: Subtitle? = null
+    private val readySubs = mutableMapOf<String, SubtitleFiles.Ready?>() // add-on subtitle link -> local UTF-8 file
     private var selectAddonSub = false
     // The languages to start with: what was picked in Audio & subtitles for this title before (the next episode, a
     // resume), else the profile's Settings. Picks in the menu change them, are kept for the title, and hold when the
@@ -298,7 +320,8 @@ class PlayerActivity : Screen() {
     private var subsOn = true
     private var viewerAddonSub = false // the viewer chose the addon file, over the file's own in the same language
     private val dialogueProcessor = DialogueAudioProcessor()
-    private var passthrough = false
+    @Volatile private var decodeAudio = false
+    @Volatile private var retryWithPcm = false
     private var pickedSub: String? = null // the exact subtitle picked for this video before: "addon:<url>" or "file:<track id>"
     // Timing for subtitles (in the file or from add-ons): offset is applied directly to the TextRenderer live.
     private var subDelay = 0L
@@ -308,6 +331,7 @@ class PlayerActivity : Screen() {
 
     // A series' episodes (for the next one and Stremio's watched ticks), from the meta addon's saved answer when there is one.
     private var meta: Meta? = null
+    private val episodic get() = hasEpisodes(type, meta?.videos)
     private var tickedWatched = false
     // "Up next": offered during credits; the current episode keeps playing until the viewer chooses the next one.
     private lateinit var upNextPanel: FrameLayout
@@ -332,7 +356,7 @@ class PlayerActivity : Screen() {
     private val startTimeout = Runnable {
         if (started) return@Runnable
         android.util.Log.w("Alder", "source ${at + 1}/${sources.size} timed out, state ${player.playbackState}")
-        next()
+        next(Failure.TIMEOUT)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -343,19 +367,11 @@ class PlayerActivity : Screen() {
             sources = JSONArray(sourcesJson).objects().map(Stream::read)
         }
         if (sources.isEmpty() && isTrailer) return finish()
-        // Audio is decoded to PCM here unless Settings says a receiver takes Dolby and DTS: TVs report passthrough
-        // (DTS-HD, TrueHD) they then can't open, and playback dies. A track that fails is swapped (onPlayerError).
-        passthrough = Settings.passthrough(this)
-        dialogueProcessor.enabled = !passthrough && Settings.clearDialogue(this)
+        decodeAudio = Settings.decodeAudio(this)
+        dialogueProcessor.enabled = Settings.clearDialogue(this)
         val renderers = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink =
-                if (passthrough) DefaultAudioSink.Builder(context).build() else
-                object : ForwardingAudioSink(DefaultAudioSink.Builder(context).setAudioProcessors(arrayOf(dialogueProcessor)).build()) {
-                    override fun getFormatSupport(format: Format): Int =
-                        if (format.sampleMimeType == MimeTypes.AUDIO_RAW) super.getFormatSupport(format) else AudioSink.SINK_FORMAT_UNSUPPORTED
-
-                    override fun supportsFormat(format: Format) = getFormatSupport(format) != AudioSink.SINK_FORMAT_UNSUPPORTED
-                }
+                playbackAudioSink(context, dialogueProcessor) { decodeAudio || retryWithPcm }
 
             override fun buildTextRenderers(
                 context: Context,
@@ -374,7 +390,19 @@ class PlayerActivity : Screen() {
                 out.addAll(wrapped)
             }
         }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON) // ffmpeg after the TV's own decoders
-        player = ExoPlayer.Builder(this, renderers).build()
+        // Start after 2 s of video and 4 s after a stall, not 1 s and 2 s: big files stall again at once on 2 s.
+        val load = DefaultLoadControl.Builder().setBufferDurationsMs(DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+            DefaultLoadControl.DEFAULT_MAX_BUFFER_MS, 2_000, 4_000)
+            .apply { bufferBytesFor(Runtime.getRuntime().maxMemory())?.let(::setTargetBufferBytes) }.build()
+        val selector = DefaultTrackSelector(this).apply {
+            setParameters(buildUponParameters().setAllowInvalidateSelectionsOnRendererCapabilitiesChange(true))
+        }
+        player = ExoPlayer.Builder(this, renderers).setLoadControl(load).setTrackSelector(selector).build()
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioTrackInitialized(eventTime: AnalyticsListener.EventTime, audioTrackConfig: AudioSink.AudioTrackConfig) {
+                android.util.Log.i("Alder", "Audio output: encoding=${audioTrackConfig.encoding}, sample rate=${audioTrackConfig.sampleRate}, channel mask=${audioTrackConfig.channelConfig}")
+            }
+        })
         val remembered = Settings.titleChoice(this, metaId)
         wantAudio = remembered?.audio ?: Settings.audioLanguage(this)
         subPref = Settings.subPref(this)
@@ -398,6 +426,7 @@ class PlayerActivity : Screen() {
                 CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW, Color.BLACK, null))
             setBackgroundColor(Color.BLACK)
         }
+        applyPictureFit()
         status = text("", BODY).onArt().apply {
             gravity = Gravity.CENTER
             maxWidth = dp(440)
@@ -455,16 +484,25 @@ class PlayerActivity : Screen() {
 
         player.addListener(object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
-                // A bad audio track (ffmpeg rejects a DTS-HD packet in The Raid around 5:14) shouldn't end the movie:
-                // drop that track and carry on from the same second on the next best one.
-                val failed = (e as? ExoPlaybackException)?.rendererFormat
-                if (failed?.sampleMimeType?.let(MimeTypes::isAudio) == true && failedAudio.add(failed.id ?: "")) {
-                    val next = bestAudio(audioGroups)
-                    if (next != null) {
-                        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                            .setOverrideForType(TrackSelectionOverride(next.mediaTrackGroup, (0 until next.length).toList())).build()
-                        player.prepare()
-                        android.util.Log.i("Alder", "Audio track changed after decoder error")
+                val format = (e as? ExoPlaybackException)?.rendererFormat
+                val sinkFormat = when (val cause = e.cause) {
+                    is AudioSink.ConfigurationException -> cause.format
+                    is AudioSink.InitializationException -> cause.format
+                    is AudioSink.WriteException -> cause.format
+                    else -> null
+                }
+                val outputFailed = audioOutputFailure(e.errorCode)
+                val selected = audioGroups.firstOrNull { it.isSelected }
+                val failed = audioGroups.firstOrNull { it.getTrackFormat(0) == format || it.getTrackFormat(0) == sinkFormat } ?: selected
+                if (shouldRetryWithPcm(decodeAudio || retryWithPcm, outputFailed, sinkFormat?.sampleMimeType)) {
+                    retryWithPcm = true
+                    retryAudio(failed, "Retrying the audio track as PCM after ${e.errorCodeName}")
+                    return
+                }
+                if ((outputFailed || format?.sampleMimeType?.let(MimeTypes::isAudio) == true) &&
+                    failed != null && failedAudio.add(failed.getTrackFormat(0))) {
+                    bestAudio(audioGroups)?.let {
+                        retryAudio(it, "Audio track changed after ${e.errorCodeName}")
                         return
                     }
                 }
@@ -473,22 +511,28 @@ class PlayerActivity : Screen() {
                     asHls = true
                     return load(position())
                 }
+                val failure = playbackFailure(e.errorCode, e.cause)
                 if (retryable(e) && retries < RETRIES) {
+                    lastSourceFailure = failure
+                    FailureLog.record(FailureLog.Operation.PLAYBACK, failure)
                     retries++
                     // ExoPlayer's own retries already took about 6 s: each of ours gets a fresh START_WAIT, or the
                     // start timeout would move on to the next source before the second retry ran.
                     main.removeCallbacks(startTimeout)
-                    main.postDelayed(startTimeout, RETRY_WAIT + START_WAIT)
+                    if (!stopped) main.postDelayed(startTimeout, RETRY_WAIT + startWait)
                     main.postDelayed({ if (!isFinishing) player.prepare() }, RETRY_WAIT)
                     return
                 }
                 android.util.Log.w("Alder", "source ${at + 1}/${sources.size} failed: ${e.errorCodeName}", e)
-                next(e.errorCodeName)
+                next(failure)
             }
 
             override fun onRenderedFirstFrame() {
+                lastSourceFailure?.let { FailureLog.record(FailureLog.Operation.PLAYBACK, it, recovered = true) }
+                lastSourceFailure = null
                 if (started) return
                 started = true
+                applyLateResume()
                 watched = true
                 retries = 0
                 hideLoading()
@@ -515,9 +559,9 @@ class PlayerActivity : Screen() {
                     }
                     val upcoming = nextVideo()
                     // shortcut: sub-two-minute series streams are treated as addon placeholders; revisit for short-form shows.
-                    if (type == "series" && !plausibleEpisode(player.duration)) {
+                    if (episodic && !plausibleEpisode(player.duration)) {
                         started = false // retry from the original resume point, not the placeholder's short ending
-                        next("source ended as a short placeholder")
+                        next(Failure.MISSING)
                     } else if (upcoming == null || upNextDismissed || stopAfter) finish()
                     else if (askStillWatching(quiet + 1)) showStillWatching(upcoming)
                     else playNext(quiet + 1)
@@ -562,6 +606,7 @@ class PlayerActivity : Screen() {
                 }
                 val audio = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
                 if (audio.isNotEmpty()) audioGroups = audio
+                val lostAudioSupport = audio.any { it.isSelected && !it.isTrackSupported(0) }
                 val best = bestAudio(audio)
                 // Releases flag foreign subtitles as forced or default (Lanterns came up with Russian "Forced" under
                 // English audio): start with subtitles only in the profile's subtitle language, whatever the sound, else
@@ -596,7 +641,11 @@ class PlayerActivity : Screen() {
                         else setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false).setOverrideForType(TrackSelectionOverride(pick.mediaTrackGroup, 0))
                     }.build()
                 }
-                if (audioPicked || best == null) return
+                if (lostAudioSupport && best == null) {
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
+                    return
+                }
+                if ((audioPicked && !lostAudioSupport) || best == null) return
                 audioPicked = true // once per video; picks made later in the settings menu stand
                 player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                     .setOverrideForType(TrackSelectionOverride(best.mediaTrackGroup, (0 until best.length).toList())).build()
@@ -629,6 +678,47 @@ class PlayerActivity : Screen() {
             begin(0L)
             return
         }
+        val waitMs = if (pickedSub?.startsWith("addon:") == true) 3_500L else SUB_WAIT
+        val stopWaiting = Runnable { subsAnswered = true; waiting?.let(::begin) }
+        main.postDelayed(stopWaiting, waitMs)
+        // Asked with the stream's file name and size when they're known, so the addon puts files for that release
+        // first. A stream found here (Continue Watching) asks again once it's known; an older answer never replaces a newer one.
+        var subsAsked = 0
+        var subsShown = 0
+        fun askSubs(stream: Stream?) = (++subsAsked).let { round -> background({
+            // Every language: the profile's subtitle language and English first, three files from each add-on in its order,
+            // then one file for each other language by name, so the list stays short enough for a remote.
+            val all = Stremio.addons(key).filter { it.serves("subtitles", type, videoId) }
+                .flatMap { a -> runCatching { a.subtitles(type, videoId, stream) }
+                    .onFailure { android.util.Log.w("Alder", "subtitles from ${a.name} failed", it) }.getOrDefault(emptyList()) }
+            all.groupBy { Languages.code(it.lang) ?: it.lang }.entries
+                .sortedWith(compareBy({ it.key != wantSub }, { it.key != "en" }, { Languages.name(it.key) }))
+                // The limit is per add-on: with one limit for all, OpenSubtitles' files filled it and SubDL's never showed.
+                .flatMap { (code, files) -> files.groupBy { it.addon }.values.flatMap { it.take(if (code == wantSub || code == "en") 3 else 1) } }
+        }) { r ->
+            if (round < subsShown || isFinishing || isDestroyed) return@background
+            subsShown = round
+            addonSubs = r.getOrDefault(emptyList())
+            android.util.Log.i("Alder", "addon subtitles: ${addonSubs.size}", r.exceptionOrNull())
+            if (options.visibility == View.VISIBLE) {
+                refreshOptionsSubtitles?.invoke()
+            }
+            val exact = addonSubs.firstOrNull { "addon:" + it.url == pickedSub }
+            if (subsAnswered) { // too late for the start: offered in the list, and the file picked last time attached now
+                if (exact != null && chosenSub == null) {
+                    chosenSub = exact
+                    if (prepared) {
+                        selectAddonSub = true
+                        load(position(), play = player.playWhenReady)
+                    }
+                }
+                return@background
+            }
+            main.removeCallbacks(stopWaiting)
+            if (chosenSub == null) chosenSub = exact ?: addonSubs.firstOrNull { Languages.same(it.lang, wantSub) } // attached, picked above
+            stopWaiting.run()
+        } }
+        askSubs(sources.firstOrNull())
         if (sources.isEmpty()) {
             pauseFacts.text = getString(R.string.finding_sources)
             pauseFacts.visibility = View.VISIBLE
@@ -644,6 +734,7 @@ class PlayerActivity : Screen() {
                     resolvingStreams = null
                     if (isFinishing || isDestroyed) return@resolve
                     sources = best
+                    best.firstOrNull()?.takeIf { subtitleExtras(it.filename, it.size).isNotEmpty() }?.let(::askSubs)
                     refreshBadges()
                     pauseFacts.text = getString(R.string.player_starting_stream)
                     val resumeToStart = pendingResume ?: known ?: 0L
@@ -657,60 +748,40 @@ class PlayerActivity : Screen() {
                 }
             )
         }
-        val waitMs = if (pickedSub?.startsWith("addon:") == true) 3_500L else SUB_WAIT
-        val stopWaiting = Runnable { subsAnswered = true; waiting?.let(::begin) }
-        main.postDelayed(stopWaiting, waitMs)
-        background({
-            // Every language: the profile's subtitle language and English first, three files each in the addon's order,
-            // then one file for each other language by name, so the list stays short enough for a remote.
-            val all = Stremio.addons(key).filter { it.serves("subtitles", type, videoId) }
-                .flatMap { a -> runCatching { a.subtitles(type, videoId) }
-                    .onFailure { android.util.Log.w("Alder", "subtitles from ${a.name} failed", it) }.getOrDefault(emptyList()) }
-            all.groupBy { Languages.code(it.lang) ?: it.lang }.entries
-                .sortedWith(compareBy({ it.key != wantSub }, { it.key != "en" }, { Languages.name(it.key) }))
-                .flatMap { (code, files) -> files.take(if (code == wantSub || code == "en") 3 else 1) }
-        }) { r ->
-            addonSubs = r.getOrDefault(emptyList())
-            android.util.Log.i("Alder", "addon subtitles: ${addonSubs.size}", r.exceptionOrNull())
-            if (options.visibility == View.VISIBLE) {
-                refreshOptionsSubtitles?.invoke()
-            }
-            val exact = addonSubs.firstOrNull { "addon:" + it.url == pickedSub }
-            if (subsAnswered) { // too late for the start: offered in the list, and the file picked last time attached now
-                if (exact != null && chosenSub == null) {
-                    chosenSub = exact
-                    if (prepared) {
-                        selectAddonSub = true
-                        val playing = player.playWhenReady
-                        load(position())
-                        player.playWhenReady = playing
-                    }
-                }
-                return@background
-            }
-            main.removeCallbacks(stopWaiting)
-            if (chosenSub == null) chosenSub = exact ?: addonSubs.firstOrNull { Languages.same(it.lang, wantSub) } // attached, picked above
-            stopWaiting.run()
-        }
         // The stream starts at once from what's known here (the intent, or the library saved on the TV) instead of
         // waiting a round trip to Stremio for the resume point; Stremio's answer corrects it if it moved elsewhere.
         if (known != null) begin(known)
-        else background({ Stremio.savedLibrary(key)?.firstOrNull { it.optString("_id") == metaId } }) { r ->
-            r.getOrNull()?.let { begin(Library.resumeAt(it, videoId)) }
+        background({ Stremio.savedLibrary(key)?.firstOrNull { it.optString("_id") == metaId } }) { r ->
+            val cached = r.getOrNull()
+            if (cached != null && (item == null || provisionalProgress)) {
+                item = cached
+                provisionalProgress = false
+                if (known == null) begin(Library.resumeAt(cached, videoId))
+            }
         }
         background({ Stremio.library(key, listOf(metaId)).firstOrNull() }) { result ->
-            item = result.fold(
-                { it ?: Library.newItem(metaId, type, intent.getStringExtra("name") ?: "", intent.getStringExtra("poster")) },
-                { null },
-            )
+            val fresh = result.getOrNull()
+            if (fresh != null && newerProgress(fresh, item)) item = fresh
+            if (item == null) {
+                provisionalProgress = result.isFailure
+                item = Library.newItem(metaId, type, intent.getStringExtra("name") ?: "", intent.getStringExtra("poster"))
+            }
             val resume = known ?: item?.let { Library.resumeAt(it, videoId) } ?: 0L
             if (!prepared) begin(resume)
-            // Watched further on the phone since the TV saved its copy: go there, unless you've already moved on.
-            else if (known == null && abs(resume - startAt) > RESUME_SLACK && position() < startAt + RESUME_SLACK) {
-                startAt = resume
-                player.seekTo(resume)
-                lastPosition = resume
-            }
+            else if (known == null && fresh != null) { lateResume = resume; applyLateResume() }
+        }
+    }
+
+    /** Moves to [lateResume] unless the viewer has already moved on. Waits for the first picture: before it, a subtitle
+     *  may still be getting ready (no file loaded) and the file doesn't yet say if it can seek (if not, a seek lands on 0:00). */
+    private fun applyLateResume() {
+        val resume = lateResume ?: return
+        if (!started) return
+        lateResume = null
+        if (abs(resume - startAt) > RESUME_SLACK && player.currentPosition < startAt + RESUME_SLACK && player.isCurrentMediaItemSeekable) {
+            startAt = resume
+            player.seekTo(resume)
+            lastPosition = resume
         }
     }
 
@@ -747,8 +818,8 @@ class PlayerActivity : Screen() {
 
     private fun dismissBackdrop() {
         if (::backdropArt.isInitialized && backdropArt.visibility == View.VISIBLE) {
-            backdropArt.animate().alpha(0f).setDuration(350).withEndAction { backdropArt.visibility = View.GONE }
-            backdropShade.animate().alpha(0f).setDuration(350).withEndAction { backdropShade.visibility = View.GONE }
+            backdropArt.exit(PAGE_MS).alpha(0f).withEndAction { backdropArt.visibility = View.GONE }
+            backdropShade.exit(PAGE_MS).alpha(0f).withEndAction { backdropShade.visibility = View.GONE }
         }
     }
 
@@ -798,9 +869,43 @@ class PlayerActivity : Screen() {
     }
 
     /** Plays the current source from [position], with its own request headers (debrid proxies need them). */
-    private fun load(position: Long, message: String? = null) {
+    private fun load(position: Long, message: String? = null, play: Boolean = true) {
         if (sources.isEmpty()) return
         val s = sources[at]
+        // The source's link first (Stream.open). A link is ready at once; a torrent's engine starts on another thread,
+        // then load runs again. A new source lets the last one go.
+        if (openedFor !== s) {
+            retryWithPcm = false
+            audioPicked = false
+            audioGroups = emptyList()
+            failedAudio.clear()
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_AUDIO).build()
+            opened?.close()
+            opened = null
+            openedFor = null
+            if (!s.opensAtOnce) return openSource(s, position, message, play)
+            opened = s.open(this)
+            openedFor = s
+        }
+        val src = opened!!
+        startWait = src.startWait ?: START_WAIT
+        val app = Settings.externalPlayer(this)
+        if (!isTrailer && !handedOff && app != null) {
+            if (handOff(src, position, app)) return
+            // No other video app on this TV: Alder plays it, and says so.
+            return load(position, getString(R.string.player_no_other_app), play)
+        }
+        // An add-on subtitle is fetched and made ready first (unpacked, UTF-8): see SubtitleFiles. Once per file.
+        chosenSub?.let { sub ->
+            if (sub.url !in readySubs) {
+                background({ SubtitleFiles.prepare(java.io.File(cacheDir, "subtitles"), sub) }) { r ->
+                    r.exceptionOrNull()?.let { android.util.Log.w("Alder", "subtitle from ${sub.addon} not prepared", it) }
+                    readySubs[sub.url] = r.getOrNull()
+                    if (!isFinishing && chosenSub === sub) load(position, message, play)
+                }
+                return
+            }
+        }
         startAt = position
         started = false
         toldUnseekable = false
@@ -814,21 +919,22 @@ class PlayerActivity : Screen() {
         updateMarkers()
         refreshBadges()
         showControls(null)
-        val sourceUrl = s.url
-        val sourceHeaders = s.headers
         background({
-            MkvChapters.fetch(sourceUrl, sourceHeaders)
+            MkvChapters.fetch(src.url, src.headers)
         }) { r ->
             val chaps = r.getOrNull()
-            if (!chaps.isNullOrEmpty() && sources.getOrNull(at)?.url == sourceUrl) {
+            if (!chaps.isNullOrEmpty() && sources.getOrNull(at) === s) {
                 mkvChapters = chaps
                 reconcileSegments()
             }
         }
-        val http = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true).setDefaultRequestProperties(s.headers)
-        val item = MediaItem.Builder().setUri(s.url).apply { if (asHls) setMimeType(MimeTypes.APPLICATION_M3U8) }
+        val http = DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true).setDefaultRequestProperties(src.headers)
+            .setReadTimeoutMs(src.readTimeoutMs)
+        val item = MediaItem.Builder().setUri(src.url).apply { if (asHls) setMimeType(MimeTypes.APPLICATION_M3U8) }
             .setSubtitleConfigurations(listOfNotNull(chosenSub?.let {
-                MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(it.url)).setMimeType(it.mimeType)
+                val ready = readySubs[it.url] // null: not prepared, so the add-on's own link as before
+                MediaItem.SubtitleConfiguration.Builder(ready?.file?.let(android.net.Uri::fromFile) ?: android.net.Uri.parse(it.url))
+                    .setMimeType(ready?.mimeType ?: it.mimeType)
                     .setLanguage(it.lang).setLabel(it.addon).setId(ADDON_SUB).build()
             })).build()
         // Files with no index (.ts, raw audio, some .avi) seek by their bitrate instead of not at all: ExoPlayer turns
@@ -837,27 +943,96 @@ class PlayerActivity : Screen() {
             .setMp3ExtractorFlags(Mp3Extractor.FLAG_ENABLE_INDEX_SEEKING)
         player.setMediaSource(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, http), extractors).createMediaSource(item), position) // files too: shifted subtitles
         player.prepare()
-        player.playWhenReady = true
+        player.playWhenReady = play && !stopped
         main.removeCallbacks(startTimeout)
-        main.postDelayed(startTimeout, START_WAIT)
+        if (!stopped) main.postDelayed(startTimeout, startWait) // else onStart starts it
+    }
+
+    /** Opens [s] off the main thread (a torrent finds peers and its file), then plays it; a failure moves on. */
+    private fun openSource(s: Stream, position: Long, message: String?, play: Boolean) {
+        main.removeCallbacks(startTimeout)
+        showLoading(message ?: getString(R.string.player_starting, s.label))
+        if (opening === s) return
+        opening = s
+        val episode = if (isTrailer || type == "movie" || isLiveType(type)) null else {
+            meta?.videos?.firstOrNull { it.id == videoId && it.season >= 0 && it.episode > 0 }
+                ?.let { it.season to it.episode }
+                ?: episodeNumbers(videoId)
+                ?: intent.getStringExtra("episode")?.substringBefore("  ·  ")?.let(::parseEpisodeLabel)
+        }
+        background({ s.open(applicationContext, episode) }) { r ->
+            if (opening === s) opening = null
+            val o = r.getOrNull()
+            if (isFinishing || isDestroyed || sources.getOrNull(at) !== s) return@background run { o?.close() }
+            if (o == null) {
+                android.util.Log.w("Alder", "source ${at + 1}/${sources.size} didn't open", r.exceptionOrNull())
+                startAt = position
+                started = false
+                return@background next(r.exceptionOrNull()?.let(::failureOf) ?: Failure.OTHER)
+            }
+            opened = o
+            openedFor = s
+            load(position, message, play)
+        }
+    }
+
+    /**
+     * Settings › Video player › a video app: Alder still picks the source, the resume point and the subtitle, then the
+     * other app plays it. False when no app on the TV opens video. Its answer comes back in [onActivityResult].
+     */
+    private fun handOff(s: Opened, position: Long, app: String): Boolean {
+        handedOff = true
+        startAt = position
+        // The chosen app, or Android's Open with list if it was uninstalled since.
+        val pick = app.takeIf { a -> ExternalPlayer.installed(this).any { it.first == a } }
+        val out = ExternalPlayer.intent(s.url, intent.getStringExtra("name").orEmpty(), s.headers, position, chosenSub?.url, pick)
+        return try {
+            startActivityForResult(out, ExternalPlayer.REQUEST)
+            showLoading(getString(R.string.player_other_app))
+            hideControls(force = true) // Alder's play and seek hints mean nothing while the other app plays
+            true
+        } catch (e: android.content.ActivityNotFoundException) {
+            android.util.Log.i("Alder", "no other video player", e)
+            false
+        }
+    }
+
+    // ponytail: VLC gives no duration for network streams; the title's last known duration stands in, else nothing is saved.
+    @Deprecated("Activity result API")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SOURCES_REQUEST) return sourcesClosed(resultCode, data)
+        if (requestCode != ExternalPlayer.REQUEST) return
+        val (position, told) = ExternalPlayer.result(data)
+        val item = item
+        val duration = told.takeIf { it > 0 } ?: item?.optJSONObject("state")?.optLong("duration") ?: 0L
+        android.util.Log.i("Alder", "other player stopped at $position of $duration")
+        if (item != null && position > 0 && duration > 0 && !isLiveType(type) && !(episodic && !plausibleEpisode(duration))) {
+            Library.record(item, videoId, position, duration, (position - startAt).coerceAtLeast(0))
+            val videos = meta?.videos
+            if (videos != null && item.optJSONObject("state")?.optInt("flaggedWatched") == 1) Library.markWatched(item, videos, videoId)
+            Library.stopped(item, nextVideo(onlyAired = false)?.id ?: intent.getStringExtra("nextVideoId"))
+            watched = true
+            push()
+        }
+        finish()
     }
 
     private fun position() = if (started) player.currentPosition else startAt
 
     /** This source failed: the next one from the same second or, with none left, the list to choose from. */
-    private fun next(reason: String = "didn't start") {
+    private fun next(reason: Failure) {
         main.removeCallbacks(startTimeout)
+        lastSourceFailure = reason
+        FailureLog.record(FailureLog.Operation.PLAYBACK, reason)
         val position = position()
         if (at + 1 < sources.size) {
             at++
             stalls.clear()
             retries = 0
             asHls = false
-            audioPicked = false
             subsPicked = false
-            failedAudio.clear()
-            android.util.Log.w("Alder", "Source failed: $reason; trying another")
-            return load(position, getString(R.string.player_source_failed_next))
+            return load(position, failureMessage(R.string.player_source_failed_next, reason))
         }
         if (isTrailer) {
             intent.getStringExtra("trailerYtId")?.takeIf { it.isNotBlank() }?.let { ytId ->
@@ -872,13 +1047,18 @@ class PlayerActivity : Screen() {
             return
         }
         if (intent.getBooleanExtra("picked", false)) {
-            showSourceError()
+            if (started) record()
+            startAt = position
+            started = false
+            showSourceError(reason)
             player.stop()
-            showLoading(getString(R.string.player_source_failed_choose))
+            showLoading(failureMessage(R.string.player_source_failed_choose, reason))
             return
         }
         startActivity(Intent(this, StreamsActivity::class.java).putExtras(intent).putExtra("pick", true)
-            .putExtra("message", "${sources.size} sources didn't play"))
+            .putExtra("message", failureMessage(R.string.player_source_failed_choose, reason))
+            .putExtra("startOver", false)
+            .putExtra("resumeAt", position))
         finish()
     }
 
@@ -892,23 +1072,30 @@ class PlayerActivity : Screen() {
     private var audioPicked = false
     private var subsPicked = false
     private var audioGroups: List<Tracks.Group> = emptyList()
-    private val failedAudio = mutableSetOf<String>() // Format ids of audio tracks that failed to decode
+    private val failedAudio = mutableSetOf<Format>()
 
-    /**
-     * The start track: never a commentary (releases only say so in the track name, which ExoPlayer ignores), then the
-     * TV's language, then the release's default track, then the most channels. ExoPlayer alone would favour whatever
-     * the TV decodes in hardware, which on The Raid was a stereo commentary.
-     */
     private fun bestAudio(groups: List<Tracks.Group>): Tracks.Group? {
-        val language = wantAudio
-        return groups
-            .filter { it.isTrackSupported(0) && (it.getTrackFormat(0).id ?: "") !in failedAudio }
-            .filter { it.getTrackFormat(0).label?.contains("commentary", ignoreCase = true) != true }
-            .maxWithOrNull(compareBy<Tracks.Group>(
-                { Languages.match(it.getTrackFormat(0).language, language) },
-                { it.getTrackFormat(0).selectionFlags and C.SELECTION_FLAG_DEFAULT != 0 },
-                { it.getTrackFormat(0).channelCount },
-            ))
+        val supported = groups.filter { it.isTrackSupported(0) }
+        if (supported.isEmpty()) return null
+        val lossless = if (decodeAudio || retryWithPcm) ({ _: Format -> false }) else losslessOutput(this, player.audioAttributes)
+        val best = bestAudioFormat(supported.map { it.getTrackFormat(0) }, wantAudio, failedAudio, lossless)
+        return supported.firstOrNull { it.getTrackFormat(0) === best }
+    }
+
+    private fun retryAudio(track: Tracks.Group?, reason: String) {
+        val resume = position()
+        if (track != null) {
+            audioPicked = true
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setOverrideForType(TrackSelectionOverride(track.mediaTrackGroup, (0 until track.length).toList())).build()
+        }
+        if (!player.isCurrentMediaItemLive) player.seekTo(resume)
+        player.prepare()
+        if (!started && !stopped) {
+            main.removeCallbacks(startTimeout)
+            main.postDelayed(startTimeout, startWait)
+        }
+        android.util.Log.i("Alder", reason)
     }
 
     private val tickTask = Runnable { tick() }
@@ -926,8 +1113,15 @@ class PlayerActivity : Screen() {
 
     override fun onStart() {
         super.onStart()
+        stopped = false
         if (prepared) {
             lastPosition = player.currentPosition
+            // Left before the picture showed: nothing was seen, so it goes on, with a fresh START_WAIT.
+            if (!started && !handedOff && !isTrailer) {
+                player.play()
+                main.removeCallbacks(startTimeout)
+                main.postDelayed(startTimeout, startWait)
+            }
             if (!isTrailer) {
                 main.postDelayed(tickTask, TICK)
                 main.post(skipTask)
@@ -941,7 +1135,7 @@ class PlayerActivity : Screen() {
         // Nothing is saved until a picture shows: a source that never starts would otherwise reset the resume point.
         // Live TV has no progress to keep, nor does a channel or event whose stream doesn't say it's live.
         if (isTrailer || !started || player.isCurrentMediaItemLive || isLiveType(type)) return
-        if (type == "series" && !plausibleEpisode(player.duration)) return
+        if (episodic && !plausibleEpisode(player.duration)) return
         val item = item ?: return
         val position = player.currentPosition
         val duration = player.duration.takeIf { it > 0 } ?: return
@@ -972,6 +1166,11 @@ class PlayerActivity : Screen() {
         val now = System.currentTimeMillis()
         stalls.addLast(now)
         while (stalls.first() < now - 60_000) stalls.removeFirst()
+        // Download speed against the file's bitrate tells a slow link (speed below bitrate) from a short buffer.
+        val size = sources.getOrNull(at)?.size ?: 0L
+        val fileKbps = if (size > 0 && player.duration > 0) size * 8 / player.duration else -1
+        android.util.Log.i("Alder", "stall: download ${DefaultBandwidthMeter.getSingletonInstance(this).bitrateEstimate / 1000} kbps, " +
+            "file $fileKbps kbps, buffered ${player.totalBufferedDuration} ms, heap ${Runtime.getRuntime().maxMemory() shr 20} MB")
         val height = sources[at].height
         if (stalls.size != 3 || offeringLower || upNextPanel.visibility == View.VISIBLE || lowerSourceHeight(height) == null) return
         showStall(height)
@@ -1011,11 +1210,11 @@ class PlayerActivity : Screen() {
         stallPanel.removeAllViews()
     }
 
-    private fun showSourceError() {
+    private fun showSourceError(reason: Failure) {
         stallPanel.removeAllViews()
         val card = column(Gravity.START,
             caps(R.string.player_source_failed, TUNGSTEN),
-            text(R.string.player_try_another, SERIF_TITLE, serif = true).marginTop(6),
+            text(failureMessage(R.string.player_try_another, reason), SERIF_TITLE, serif = true).marginTop(6),
             pill(R.string.player_other_sources).apply { setOnClickListener { changeStream() } }.marginTop(12)
         ).apply {
             setPadding(dp(18), dp(18), dp(18), dp(18))
@@ -1039,7 +1238,7 @@ class PlayerActivity : Screen() {
     }
 
     private fun showUpNext() {
-        if (type == "series" && !plausibleEpisode(player.duration)) return
+        if (episodic && !plausibleEpisode(player.duration)) return
         if (stopAfter || stillPanel.visibility == View.VISIBLE) return // Sleep: After this episode
         val next = nextVideo() ?: return
         if (offeringLower) dismissStall()
@@ -1153,7 +1352,7 @@ class PlayerActivity : Screen() {
         when {
             stopAfter -> { stopAfter = false; setSleepAt(System.currentTimeMillis() + SLEEP_TIMER) }
             sleepAt > 0 -> setSleepAt(0)
-            type == "series" -> stopAfter = true
+            episodic -> stopAfter = true
             else -> setSleepAt(System.currentTimeMillis() + SLEEP_TIMER)
         }
         intent.putExtra("stopAfter", stopAfter)
@@ -1179,7 +1378,13 @@ class PlayerActivity : Screen() {
         if (isTrailer || !watched || player.isCurrentMediaItemLive || isLiveType(type)) return
         val key = authKey ?: return
         val snapshot = item?.let { JSONObject(it.toString()) } ?: return
-        background({ Stremio.saveLibrary(key, listOf(snapshot)) }) {}
+        ProgressSaves.keep(key, snapshot, provisionalProgress)
+        background({ syncWatchProgress(key) }) { result ->
+            result.getOrNull()?.let { failure ->
+                android.widget.Toast.makeText(this, failureMessage(R.string.progress_saved_on_tv, failure),
+                    android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -1284,7 +1489,7 @@ class PlayerActivity : Screen() {
 
     private fun fetchSegments() {
         val parts = videoId.split(":")
-        if (type != "series" || !metaId.startsWith("tt") || parts.size < 3) return
+        if (!episodic || !metaId.startsWith("tt") || parts.size < 3) return
         background({
             val json = JSONObject(Http.get("https://api.introdb.app/segments?imdb_id=${parts[0]}&season=${parts[1]}&episode=${parts[2]}"))
             fun part(name: String) = json.optJSONObject(name)?.let { seg ->
@@ -1623,9 +1828,12 @@ class PlayerActivity : Screen() {
             ?.let(Languages::code)?.let(Languages::name) ?: getString(R.string.state_on)
         val videoHeight = player.videoFormat?.height?.takeIf { it > 0 }
             ?: tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }?.getTrackFormat(0)?.height ?: 0
+        val videoWidth = player.videoFormat?.width?.takeIf { it > 0 }
+            ?: tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }?.getTrackFormat(0)?.width ?: 0
         val badges = playerBadges(
             stream = sources.getOrNull(at),
             videoHeight = videoHeight,
+            videoWidth = videoWidth,
             audioLanguage = audio?.language,
             audioMime = audio?.sampleMimeType,
             audioLabel = audio?.label,
@@ -1842,7 +2050,7 @@ class PlayerActivity : Screen() {
             shown = true
             view.subtitleView?.setBottomPaddingFraction(0.28f) // keep captions above the seek bar and buttons
             controls.visibility = View.VISIBLE
-            controls.animate().alpha(1f).setDuration(150).start()
+            controls.enter(FOCUS_MS).alpha(1f).start()
             updateProgress()
             (focus ?: playPause).requestFocus()
         } else focus?.requestFocus()
@@ -1856,7 +2064,7 @@ class PlayerActivity : Screen() {
         shown = false
         main.removeCallbacks(hideTask)
         main.removeCallbacks(progressTask)
-        controls.animate().alpha(0f).setDuration(250).withEndAction {
+        controls.exit(ENTER_MS).alpha(0f).withEndAction {
             if (!shown) {
                 controls.visibility = View.GONE
                 view.subtitleView?.setBottomPaddingFraction(0.08f)
@@ -1938,13 +2146,35 @@ class PlayerActivity : Screen() {
     private var toldUnseekable = false
 
     /** The source list for this video, from this second; the player closes, and a pick starts a new one. */
+    /**
+     * The source list over a paused player, not in its place: Back comes back to the same picture at once, with no
+     * reload (a debrid link can expire meanwhile, and a file that can't seek would restart at 0:00). A source picked
+     * there comes back in [onActivityResult] and plays from the same second.
+     */
     private fun changeStream() {
-        startActivity(Intent(this, StreamsActivity::class.java).putExtras(intent).apply {
+        playAfterSources = player.playWhenReady
+        player.pause()
+        startActivityForResult(Intent(this, StreamsActivity::class.java).putExtras(intent).apply {
             removeExtra("picked"); removeExtra("maxHeight")
-            putExtra("pick", true)
-            if (!player.isCurrentMediaItemLive) putExtra("resumeAt", player.currentPosition)
-        })
-        finish()
+            putExtra("pick", true); putExtra("fromPlayer", true)
+            if (!player.isCurrentMediaItemLive) putExtra("resumeAt", position())
+        }, SOURCES_REQUEST)
+    }
+    private var playAfterSources = false
+
+    /** Back from the source list: the picked source at the same second, or the paused one as it was. */
+    private fun sourcesClosed(resultCode: Int, data: Intent?) {
+        val picked = data?.getStringExtra("sources")?.takeIf { resultCode == RESULT_OK }
+        if (picked == null) {
+            // The list is see-through (Alder.Over), so this screen was only paused and its picture is still there.
+            if (playAfterSources) player.play()
+            return
+        }
+        sources = JSONArray(picked).objects().map(Stream::read)
+        at = 0
+        intent.putExtra("picked", true) // as before: if it fails, say so and offer the list again
+        dismissStall()
+        load(if (player.isCurrentMediaItemLive) 0L else position())
     }
 
     // ---------- playback options, after design/player-options-cinematic-minimal-glass.png ----------
@@ -2146,6 +2376,7 @@ class PlayerActivity : Screen() {
 
         val colors = listOf(
             "white" to getString(R.string.color_white),
+            "gray" to getString(R.string.color_gray),
             "yellow" to getString(R.string.color_yellow),
             "cyan" to getString(R.string.color_cyan),
             "cream" to getString(R.string.color_cream),
@@ -2598,7 +2829,7 @@ class PlayerActivity : Screen() {
             }
         }
 
-        if (!passthrough) {
+        run {
             audioPanel.addView(divider().apply {
                 layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(12), 0, dp(8)) }
             })
@@ -2692,36 +2923,9 @@ class PlayerActivity : Screen() {
         syncPanel.addView(caps(R.string.subtitle_size, TEXT_3), wrap().apply { bottomMargin = dp(4) })
         val sizes = listOf(80 to R.string.size_small, 100 to R.string.size_medium, 130 to R.string.size_large,
             160 to R.string.size_extra_large).map { (size, words) -> size to getString(words) }
-        var currentSubSize = Settings.subtitleSize(this)
-        val sizePills = mutableListOf<TextView>()
-        val sizeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        sizes.forEachIndexed { idx, (sizeValue, sizeLabel) ->
-            val isCur = currentSubSize == sizeValue
-            val p = text(sizeLabel, SMALL, bold = true, color = if (isCur) TUNGSTEN else TEXT_2).apply {
-                gravity = Gravity.CENTER
-                maxLines = 1
-                background = if (isCur) rounded(0x3DF3D9B1.toInt(), 8) else glass(8)
-                rowFocus(8, rest = { if (currentSubSize == sizeValue) rounded(0x3DF3D9B1.toInt(), 8) else glass(8) }) { has ->
-                    setTextColor(if (has || currentSubSize == sizeValue) TEXT else TEXT_2)
-                }
-                setOnClickListener {
-                    currentSubSize = sizeValue
-                    Settings.setSubtitleSize(this@PlayerActivity, sizeValue)
-                    view.subtitleView?.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * sizeValue / 100f)
-                    sizePills.forEachIndexed { i, pill ->
-                        val active = sizes[i].first == currentSubSize
-                        pill.background = if (active) rounded(0x3DF3D9B1.toInt(), 8) else glass(8)
-                        pill.setTextColor(if (active) TUNGSTEN else TEXT_2)
-                    }
-                }
-            }
-            sizePills.add(p)
-            sizeRow.addView(p, LinearLayout.LayoutParams(0, dp(30), 1f).apply {
-                if (idx < sizes.lastIndex) marginEnd = dp(5)
-            })
+        val sizeRow = pillRow(sizes, Settings.subtitleSize(this)) { sizeValue ->
+            Settings.setSubtitleSize(this@PlayerActivity, sizeValue)
+            view.subtitleView?.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * sizeValue / 100f)
         }
         syncPanel.addView(sizeRow, LinearLayout.LayoutParams(-1, dp(30)).apply { bottomMargin = dp(10) })
 
@@ -2730,37 +2934,23 @@ class PlayerActivity : Screen() {
 
         syncPanel.addView(caps(R.string.background_box, TEXT_3), wrap().apply { bottomMargin = dp(4) })
         val bgOptions = listOf(true to getString(R.string.state_on), false to getString(R.string.state_off))
-        val bgPills = mutableListOf<TextView>()
-        val bgRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        bgOptions.forEachIndexed { idx, (bgValue, bgLabel) ->
-            val isCur = currentBg == bgValue
-            val p = text(bgLabel, SMALL, bold = true, color = if (isCur) TUNGSTEN else TEXT_2).apply {
-                gravity = Gravity.CENTER
-                maxLines = 1
-                background = if (isCur) rounded(0x3DF3D9B1.toInt(), 8) else glass(8)
-                rowFocus(8, rest = { if (currentBg == bgValue) rounded(0x3DF3D9B1.toInt(), 8) else glass(8) }) { has ->
-                    setTextColor(if (has || currentBg == bgValue) TEXT else TEXT_2)
-                }
-                setOnClickListener {
-                    currentBg = bgValue
-                    Settings.setSubtitleBackground(this@PlayerActivity, bgValue)
-                    applySubtitleStyle()
-                    bgPills.forEachIndexed { i, pill ->
-                        val active = bgOptions[i].first == currentBg
-                        pill.background = if (active) rounded(0x3DF3D9B1.toInt(), 8) else glass(8)
-                        pill.setTextColor(if (active) TUNGSTEN else TEXT_2)
-                    }
-                }
-            }
-            bgPills.add(p)
-            bgRow.addView(p, LinearLayout.LayoutParams(0, dp(30), 1f).apply {
-                if (idx < bgOptions.lastIndex) marginEnd = dp(6)
-            })
+        val bgRow = pillRow(bgOptions, currentBg, gap = 6) { bgValue ->
+            currentBg = bgValue
+            Settings.setSubtitleBackground(this@PlayerActivity, bgValue)
+            applySubtitleStyle()
         }
         syncPanel.addView(bgRow, LinearLayout.LayoutParams(-1, dp(30)).apply { bottomMargin = dp(14) })
+
+        syncPanel.addView(divider().apply {
+            layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(4), 0, dp(10)) }
+        })
+        syncPanel.addView(caps(R.string.picture_fit, TUNGSTEN), wrap().apply { bottomMargin = dp(6) })
+        val fits = listOf("fit" to getString(R.string.picture_fit_fit), "zoom" to getString(R.string.picture_fit_zoom),
+            "stretch" to getString(R.string.picture_fit_stretch))
+        syncPanel.addView(pillRow(fits, Settings.pictureFit(this)) { fit ->
+            Settings.setPictureFit(this@PlayerActivity, fit)
+            applyPictureFit()
+        }, LinearLayout.LayoutParams(-1, dp(30)).apply { bottomMargin = dp(14) })
 
         syncPanel.addView(divider().apply {
             layoutParams = LinearLayout.LayoutParams(-1, dp(1)).apply { setMargins(0, dp(4), 0, dp(10)) }
@@ -2856,7 +3046,10 @@ class PlayerActivity : Screen() {
         val oldDelay = subDelay
         subDelay = newDelay
         textRenderer?.offsetUs = subDelay * 1000L
-        if (subDelay > oldDelay) {
+        // A seek to the same second drops cues already queued for the old timing. Only where the file can seek: ExoPlayer
+        // takes any seek in a file it can't seek as a seek to 0:00, so Right (subtitle later) restarted the film, which
+        // the 1.2 fix (canSeek) had stopped for scrubbing.
+        if (subDelay > oldDelay && player.isCurrentMediaItemSeekable) {
             player.seekTo(player.currentPosition)
         }
     }
@@ -2888,18 +3081,62 @@ class PlayerActivity : Screen() {
     private fun timing(delay: Long) = formatTiming(delay, getString(R.string.timing_on_time),
         getString(R.string.timing_earlier), getString(R.string.timing_later))
 
+    /** One choice as a row of pills (subtitle size, background box, picture fit); the picked one is in tungsten. */
+    private fun <T> pillRow(options: List<Pair<T, String>>, current: T, gap: Int = 5, pick: (T) -> Unit): LinearLayout {
+        var chosen = current
+        val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val pills = options.mapIndexed { i, (value, label) ->
+            text(label, SMALL, bold = true).apply {
+                gravity = Gravity.CENTER
+                maxLines = 1
+                rowFocus(8, rest = { if (chosen == value) rounded(0x3DF3D9B1.toInt(), 8) else glass(8) }) { has ->
+                    setTextColor(if (has || chosen == value) TEXT else TEXT_2)
+                }
+                row.addView(this, LinearLayout.LayoutParams(0, dp(30), 1f).apply { if (i < options.lastIndex) marginEnd = dp(gap) })
+            }
+        }
+        fun paint() = pills.forEachIndexed { i, pill ->
+            val on = options[i].first == chosen
+            pill.background = if (on) rounded(0x3DF3D9B1.toInt(), 8) else glass(8)
+            pill.setTextColor(if (on) TUNGSTEN else TEXT_2)
+        }
+        pills.forEachIndexed { i, pill -> pill.setOnClickListener { chosen = options[i].first; pick(chosen); paint() } }
+        paint()
+        return row
+    }
+
+    /**
+     * Fit, Zoom or Stretch. Media3 keeps the subtitles inside the video's frame, which Zoom makes larger than the screen,
+     * so under Zoom they move onto the screen itself and stay readable; Fit and Stretch put them back.
+     */
+    private fun applyPictureFit() {
+        val fit = Settings.pictureFit(this)
+        view.resizeMode = resizeModeFor(fit)
+        val subs = view.subtitleView ?: return
+        val frame = view.findViewById<ViewGroup>(androidx.media3.ui.R.id.exo_content_frame) ?: return
+        val home: ViewGroup = if (fit == "zoom") view else frame
+        if (subs.parent === home) return
+        (subs.parent as? ViewGroup)?.removeView(subs)
+        val at = if (home === view) view.indexOfChild(frame) + 1
+            else frame.indexOfChild(frame.findViewById(androidx.media3.ui.R.id.exo_buffering)).takeIf { it >= 0 } ?: frame.childCount
+        home.addView(subs, at, FrameLayout.LayoutParams(-1, -1))
+    }
+
     private fun sleep() = sleepLabel(stopAfter, sleepAt, System.currentTimeMillis(), getString(R.string.sleep_after_episode),
         getString(R.string.sleep_in_minutes), getString(R.string.state_off))
 
     override fun onStop() {
         super.onStop()
+        stopped = true
         if (!::status.isInitialized) return
         main.removeCallbacks(tickTask)
         main.removeCallbacks(progressTask)
         main.removeCallbacks(skipTask)
         main.removeCallbacks(loadingTask)
+        // A paused source in the background shows no picture: timing it out would skip a good source.
+        main.removeCallbacks(startTimeout)
         player.pause()
-        if (isTrailer || !watched || player.isCurrentMediaItemLive || isLiveType(type) || type == "series" && !plausibleEpisode(player.duration)) return
+        if (isTrailer || !watched || player.isCurrentMediaItemLive || isLiveType(type) || episodic && !plausibleEpisode(player.duration)) return
         record()
         // The player's own episode list first: Home's Resume passes no next episode when the title's details weren't in
         // yet, and a finished episode with no next one drops the title out of Continue Watching.
@@ -2911,12 +3148,15 @@ class PlayerActivity : Screen() {
         resolvingStreams?.cancel()
         resolvingStreams = null
         main.removeCallbacks(startTimeout)
+        opened?.close()
+        opened = null
         main.removeCallbacks(loadingTask)
         if (::status.isInitialized) player.release()
         super.onDestroy()
     }
 
     private companion object {
+        const val SOURCES_REQUEST = 42
         const val TICK = 10_000L
         const val RESUME_SLACK = 10_000L // how far apart the saved and fresh resume points may be before it jumps
         const val SKIP = 10_000L // ms a Left/Right press on the bar moves
@@ -3049,4 +3289,21 @@ private class SeekBar(context: Context) : View(context) {
         paint.color = Screen.TEXT
         if (duration > 0) canvas.drawCircle(x(position), y, knob, paint)
     }
+}
+
+/** Media3's resize mode for Settings' picture fit: Zoom fills the screen and crops, Stretch fills it and changes the shape. */
+internal fun resizeModeFor(fit: String) = when (fit) {
+    "zoom" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+    "stretch" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+    else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+}
+
+/**
+ * The buffer's size limit for the memory Android gives Alder ([maxHeap], bytes), or null for Media3's own (about 131 MB:
+ * 10 to 17 s of a 4K remux). With the large heap (512 MB on most TV boxes) the buffer can use up to 200 MB, and
+ * 250 MB stays free for decoders, pictures and screens. As NuvioTV does it.
+ */
+internal fun bufferBytesFor(maxHeap: Long): Int? {
+    val mb = 1024L * 1024
+    return (maxHeap - 250 * mb).coerceAtMost(200 * mb).takeIf { it > DefaultLoadControl.DEFAULT_VIDEO_BUFFER_SIZE }?.toInt()
 }

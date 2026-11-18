@@ -38,6 +38,23 @@ class StreamsResolverTest {
     }
 
     @Test
+    fun ranksHigherResolutionWhenItFitsAndBestPictureIsPreferred() {
+        val hd = stream("Movie 1080p WEB-DL")
+        val uhd = stream("Movie 2160p WEB-DL")
+        val tv = Device(hevc = true, av1 = false, dolbyVision = false, hdr = true, height = 1080)
+        val uhdTv = Device(hevc = true, av1 = false, dolbyVision = false, hdr = false, height = 2160)
+
+        fun rank(device: Device, override: Int = 0, bestPicture: Boolean = true) =
+            StreamsResolver.rank(listOf(hd, uhd), device, override, null, null, false, { 0 }, bestPicture)
+
+        assertEquals(listOf(hd, uhd), rank(tv))
+        assertEquals(listOf(uhd, hd), rank(uhdTv))
+        assertEquals(listOf(uhd, hd), rank(tv, override = 2160))
+        assertEquals(listOf(hd, uhd), rank(uhdTv, override = 1080))
+        assertEquals(listOf(hd, uhd), rank(uhdTv, bestPicture = false))
+    }
+
+    @Test
     fun wantedFiltersCamReleases() {
         val cam = stream("Movie (CAM)")
         assertTrue(cam.cam)

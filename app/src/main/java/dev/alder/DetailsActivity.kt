@@ -125,13 +125,17 @@ class DetailsActivity : Screen() {
     private var selectedSeason = 1
     private var episodeRows = emptyList<View>()
     private var meta: Meta? = null
+    private val episodic get() = hasEpisodes(type, meta?.videos)
     private var item: JSONObject? = null // the title's library item: progress and whether it's in My List
     private var itemChangedHere = false
+    private var savingEdit = false
     private var similarRequested = false
     private var imdbTrailers: List<Stream> = emptyList()
     private var trailerRequested = false
     private var certificate: String? = null
     private var certificateRequested = false
+    private var letterboxdScore: String? = null
+    private var letterboxdRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -158,20 +162,25 @@ class DetailsActivity : Screen() {
         }
         setWindowed(root, heroArt)
 
-        (initialArt ?: poster)?.let { Images.load(it, heroArt, artWidth, urgent = true) { heroArt.alpha = 1f; refrost() } }
+        // The art arrives: a touch close, settling back as the page opens (a transform only, no redraw of the art).
+        (initialArt ?: poster)?.let { Images.load(it, heroArt, artWidth, urgent = true) {
+            heroArt.alpha = 1f; heroArt.scaleX = ARRIVE; heroArt.scaleY = ARRIVE
+            heroArt.enter(ART_MS).scaleX(1f).scaleY(1f).start()
+            refrost()
+        } }
 
         fun show(m: Meta) {
             meta = m
             val art = m.background ?: initialArt ?: poster
             if (heroArt.tag != art) Images.load(art, heroArt, artWidth, urgent = true) {
-                heroArt.animate().alpha(1f).setDuration(250).start()
+                heroArt.enter().alpha(1f).start()
                 refrost()
             }
             richCast = m.castMembers
             certificate = m.certification ?: certificate
             showHero(m)
-            if (type == "series" && m.videos.isNotEmpty()) buildGuide(m.videos)
-            if (type == "movie" && !similarRequested) { similarRequested = true; loadSimilar() }
+            if (hasEpisodes(type, m.videos) && m.videos.isNotEmpty()) buildGuide(m.videos)
+            if (!hasEpisodes(type, m.videos) && !similarRequested) { similarRequested = true; loadSimilar() }
             loadRichCast()
             if (!certificateRequested && certificate == null && m.id.startsWith("tt")) {
                 certificateRequested = true
@@ -179,6 +188,18 @@ class DetailsActivity : Screen() {
                     val resolved = r.getOrNull()
                     if (resolved != null && resolved != certificate) {
                         certificate = resolved
+                        if (!guideOpen && !infoOpen && !similarOpen && !filmographyOpen) showHero(meta)
+                    }
+                }
+            }
+            if (!letterboxdRequested && Settings.wantsLetterboxd(this, type, m.id)) {
+                letterboxdRequested = true
+                letterboxdScore = knownLetterboxd(m.id)
+                val key = Settings.mdblistKey(this)
+                background({ letterboxd(m.id, key, fresh = true) }) { r ->
+                    val score = r.getOrNull()
+                    if (score != null && score != letterboxdScore) {
+                        letterboxdScore = score
                         if (!guideOpen && !infoOpen && !similarOpen && !filmographyOpen) showHero(meta)
                     }
                 }
@@ -203,13 +224,17 @@ class DetailsActivity : Screen() {
                 if (meta == null) saved?.let(::show)
             }
         }
-        background({ Stremio.addons(key).meta(type, metaId, together = true) }) { result ->
+        background({ Stremio.addons(key).meta(type, metaId, together = true, reportFailure = true) }) { result ->
             val fresh = result.getOrNull()
             if (fresh != null) show(fresh)
-            else if (meta == null) showHero(null)
+            else if (meta == null) {
+                val failure = result.exceptionOrNull()?.let(::failureOf) ?: Failure.MISSING
+                FailureLog.record(FailureLog.Operation.DETAILS, failure)
+                showHero(null, failure)
+            }
         }
         background({ Stremio.library(key, listOf(metaId)).firstOrNull() }) { result ->
-            if (!itemChangedHere) {
+            if (!itemChangedHere && !savingEdit) {
                 item = result.getOrNull() ?: item
                 if (meta != null) showHero(meta)
             }
@@ -218,12 +243,14 @@ class DetailsActivity : Screen() {
 
     // ---------- title and watch window ----------
 
-    private fun showHero(m: Meta?) {
+    private fun showHero(m: Meta?, failure: Failure? = null) {
         hero.removeAllViews()
         val title = text(m?.name ?: name, SERIF_HERO, serif = true).onArt().apply {
             maxLines = 2; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.BOTTOM or Gravity.START
             // The box is a fixed height: at large font sizes a two-line name shrinks to fit instead of clipping.
-            setAutoSizeTextTypeUniformWithConfiguration(20, SERIF_HERO.toInt(), 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+            // Android 8+ only; older TVs ellipsize the second line instead.
+            if (android.os.Build.VERSION.SDK_INT >= 26)
+                setAutoSizeTextTypeUniformWithConfiguration(20, SERIF_HERO.toInt(), 1, android.util.TypedValue.COMPLEX_UNIT_SP)
         }
         val titleArea = FrameLayout(this).apply {
             addView(title, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.START))
@@ -245,11 +272,12 @@ class DetailsActivity : Screen() {
         }
         val stack = column(Gravity.START).apply { addView(titleArea, LinearLayout.LayoutParams(-1, -2)) }
         if (m == null) {
-            val error = failed(getString(R.string.details_load_failed)) { recreate() }
+            val error = failed(failure?.let { failureMessage(R.string.details_load_failed, it) }
+                ?: getString(R.string.details_load_failed)) { recreate() }
             stack.addView(error.marginTop(16))
             error.post { error.getChildAt(2).requestFocus() }
         } else {
-            val length = if (type == "series") m.videos.map { it.season }.filter { it > 0 }.distinct().size
+            val length = if (hasEpisodes(type, m.videos)) m.videos.map { it.season }.filter { it > 0 }.distinct().size
                 .takeIf { it > 0 }?.let(::seasons) else m.runtime
             val facts = listOfNotNull(m.year, m.genres.firstOrNull(), length).joinToString(DOT)
             val factRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -269,15 +297,10 @@ class DetailsActivity : Screen() {
             factRow.addView(text(facts, SMALL, color = TEXT_2).onArt().apply {
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
             })
-            m.rating?.let { rating ->
+            val ratings = shownRatings(Settings.ratings(this), m.rating, letterboxdScore)
+            if (ratings.isNotEmpty()) {
                 factRow.addView(text(DOT, SMALL, color = TEXT_2).onArt())
-                factRow.addView(text("IMDb", 9.5f, bold = true, color = BASE).apply {
-                    includeFontPadding = false
-                    setLineSpacing(0f, 1f)
-                    setPadding(dp(5), dp(2), dp(5), dp(2))
-                    background = rounded(TUNGSTEN, 3)
-                })
-                factRow.addView(text(rating, SMALL, color = TEXT_2).onArt(), wrap().apply { marginStart = dp(6) })
+                addRatings(factRow, ratings, tagSp = 9.5f, firstGap = 0)
             }
             stack.addView(factRow, wrap().apply { topMargin = dp(12) })
             m.description?.takeIf { it.isNotBlank() }?.let {
@@ -303,7 +326,7 @@ class DetailsActivity : Screen() {
         hero.addView(stack, FrameLayout.LayoutParams(dp(HERO_W), -2, Gravity.BOTTOM or Gravity.START).apply {
             leftMargin = dp(PAD); bottomMargin = dp(92)
         })
-        val hasEpisodes = type == "series" && m?.videos?.isNotEmpty() == true
+        val hasEpisodes = hasEpisodes(type, m?.videos) && m?.videos?.isNotEmpty() == true
         if (hasEpisodes || ::similarOverlay.isInitialized) {
             hero.addView(caps(if (hasEpisodes) R.string.details_episodes_below else R.string.details_more_below, TEXT_2).onArt().apply {
                 isFocusable = true
@@ -319,8 +342,7 @@ class DetailsActivity : Screen() {
     private fun addWatch(m: Meta, stack: LinearLayout) {
         val target = playTarget(m)
         val episode = target?.second
-        // Under a minute in is not started: a title opened and closed at 0:00 offers Play, not Resume.
-        val resumeAt = (item?.let { Library.resumeAt(it, target?.first ?: metaId) } ?: 0L).takeIf { it >= STARTED } ?: 0L
+        val resumeAt = item?.let { Library.resumeAt(it, target?.first ?: metaId) } ?: 0L
         val videos = m.videos
         val watched = Library.watched(item, videos)
         val airedVideos = videos.filter { it.season > 0 && isEpisodeAired(it.released) }
@@ -341,7 +363,7 @@ class DetailsActivity : Screen() {
 
         val hasTrailer = m.trailerStreams.isNotEmpty() || m.trailerYtId != null || imdbTrailers.isNotEmpty()
 
-        if (type == "series" && unairedNext != null) {
+        if (episodic && unairedNext != null) {
             val airDate = airDay(unairedNext.released) ?: getString(R.string.details_airs_soon)
             val caughtUp = getString(if (airedVideos.isEmpty()) R.string.details_premiere else R.string.details_up_to_date,
                 unairedNext.season, unairedNext.episode, airDate)
@@ -354,7 +376,7 @@ class DetailsActivity : Screen() {
             }
             val trailerButton = if (hasTrailer) trailerPill { playTrailer(m) } else null
             infoButton = iconButton("ⓘ", getString(R.string.action_more_info)) { showInfo() }
-            listButton = iconButton(if (Library.inList(item)) "✓" else "+", getString(R.string.tab_my_list)) { toggleList() }
+            listButton = listButton()
             buttonRow = LinearLayout(this).apply {
                 gravity = Gravity.CENTER_VERTICAL
                 clipChildren = false
@@ -369,11 +391,14 @@ class DetailsActivity : Screen() {
             return
         }
         val duration = item?.optJSONObject("state")?.optLong("duration") ?: 0L
-        val remaining = if (resumeAt > 0 && duration > resumeAt) getString(R.string.time_left, runtime("${(duration - resumeAt) / 60_000} min")) else null
-        val where = listOfNotNull(episode?.let { "S${it.season} E${it.episode}" }, episode?.title?.takeIf { it.isNotBlank() }, remaining).joinToString(DOT)
-        if (where.isNotEmpty() && resumeAt > 0) stack.addView(text(where, SMALL, bold = true).onArt().apply {
-            maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-        }.marginTop(16))
+        val remaining = timeLeft(duration, resumeAt)
+        if (resumeAt > 0) {
+            val stopped = getString(R.string.stopped_at, android.text.format.DateUtils.formatElapsedTime(resumeAt / 1000))
+            val where = listOfNotNull(episode?.let { "S${it.season} E${it.episode}" }, episode?.title?.takeIf { it.isNotBlank() }, remaining, stopped)
+            stack.addView(text(where.joinToString(DOT), SMALL, bold = true).onArt().apply {
+                maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+            }.marginTop(16))
+        }
         if (remaining != null) stack.addView(progressBar(resumeAt.toFloat() / duration), LinearLayout.LayoutParams(dp(240), dp(3)).apply { topMargin = dp(8) })
 
         playButton = pill(if (resumeAt > 0) R.string.action_resume else R.string.action_play, R.drawable.ic_play).apply {
@@ -386,7 +411,7 @@ class DetailsActivity : Screen() {
             openSources(target?.first ?: metaId, startOver = true)
         } else null
         infoButton = iconButton("ⓘ", getString(R.string.action_more_info)) { showInfo(focusCast = false) }
-        listButton = iconButton(if (Library.inList(item)) "✓" else "+", getString(R.string.tab_my_list)) { toggleList() }
+        listButton = listButton()
         buttonRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
@@ -506,21 +531,30 @@ class DetailsActivity : Screen() {
     /** What Play opens: the episode Continue Watching points at, or the first episode, or the movie itself. */
     private fun playTarget(m: Meta?): Pair<String, Video?>? {
         val videos = m?.videos.orEmpty()
+        item?.let { entry ->
+            val saved = Library.savedVideoId(entry)
+            if (Library.resumeAt(entry, saved) > 0 || Library.nextEpisodePending(entry)) {
+                return saved to videos.firstOrNull { it.id == saved }
+            }
+        }
         if (videos.isEmpty()) return metaId to null
         val current = item?.optJSONObject("state")?.text("video_id")
         val video = videos.firstOrNull { it.id == current } ?: videos.firstOrNull { it.season > 0 } ?: videos.first()
         return video.id to video
     }
 
+    private fun listButton(): TextView {
+        val inList = Library.inList(item)
+        return iconButton(if (inList) "✓" else "+",
+            getString(if (inList) R.string.action_remove_from_list else R.string.action_add_to_list), ::toggleList)
+    }
+
     private fun toggleList() {
-        itemChangedHere = true
-        val entry = item ?: Library.newItem(metaId, type, meta?.name ?: name, meta?.poster ?: poster)
-        Library.setInList(entry, !Library.inList(item))
-        item = entry
-        listButton.text = if (Library.inList(entry)) "✓" else "+"
-        listButton.contentDescription = getString(if (Library.inList(entry)) R.string.action_remove_from_list else R.string.action_add_to_list)
-        val snapshot = JSONObject(entry.toString())
-        background({ Stremio.saveLibrary(key, listOf(snapshot)) }) {}
+        val add = !Library.inList(item)
+        editLibrary({ Library.setInList(it, add) }, R.string.list_update_failed) {
+            listButton.text = if (add) "✓" else "+"
+            listButton.contentDescription = getString(if (add) R.string.action_remove_from_list else R.string.action_add_to_list)
+        }
     }
 
     // ---------- glass and episode guide ----------
@@ -656,8 +690,7 @@ class DetailsActivity : Screen() {
             val status = when {
                 !aired -> airDay(video.released)?.let { getString(R.string.airs_on, it) }.orEmpty()
                 video.id in watched -> "✓"
-                resumeAt > 0 && duration > resumeAt -> getString(R.string.time_left_minutes, ((duration - resumeAt) / 60_000).toInt())
-                else -> meta?.runtime.orEmpty()
+                else -> timeLeft(duration, resumeAt) ?: meta?.runtime.orEmpty()
             }
             val titleColor = when {
                 !aired -> TEXT_3
@@ -716,9 +749,9 @@ class DetailsActivity : Screen() {
         guide.visibility = View.VISIBLE
         guide.alpha = 0f
         guide.translationY = dp(28).toFloat()
-        guide.animate().alpha(1f).translationY(0f).setDuration(260).start()
+        guide.enter().alpha(1f).translationY(0f).start()
         // The film steps back behind the guide, so the chips and panel read over a bright backdrop.
-        heroArt.animate().alpha(GUIDE_ART).setDuration(260).withEndAction { refrost() }.start()
+        heroArt.animate().alpha(GUIDE_ART).setDuration(ENTER_MS).withEndAction { refrost() }.start()
         leftShade(false) // the episode list sits on glass: the art can run to the left edge as it does on the right
         val currentId = playTarget(meta)?.first
         (episodeRows.firstOrNull { it.tag == currentId } ?: episodeRows.firstOrNull())?.requestFocus()
@@ -726,26 +759,40 @@ class DetailsActivity : Screen() {
 
     private fun hideGuide() {
         guideOpen = false
-        heroArt.animate().alpha(1f).setDuration(220).withEndAction { refrost() }.start()
+        heroArt.enter().alpha(1f).withEndAction { refrost() }.start()
         leftShade(true)
-        guide.animate().alpha(0f).translationY(dp(24).toFloat()).setDuration(220).withEndAction {
+        guide.exit().alpha(0f).translationY(dp(24).toFloat()).withEndAction {
             guide.visibility = View.GONE
             hero.visibility = View.VISIBLE
             if (::playButton.isInitialized) playButton.requestFocus()
         }.start()
     }
 
-    private fun ensureLibraryItem(): JSONObject {
-        itemChangedHere = true
-        val entry = item ?: Library.newItem(metaId, type, meta?.name ?: name, meta?.poster ?: poster)
-        item = entry
-        return entry
+    private fun editLibrary(change: (JSONObject) -> Unit, title: Int = R.string.library_edit_failed,
+                            previous: Failure? = null, done: () -> Unit) {
+        if (savingEdit) return
+        savingEdit = true
+        val entry = Library.newItem(metaId, type, meta?.name ?: name, meta?.poster ?: poster)
+        background({
+            Stremio.editLibrary(key, metaId, entry, change)
+        }) { result ->
+            savingEdit = false
+            if (isFinishing) return@background
+            result.onSuccess {
+                previous?.let { FailureLog.record(FailureLog.Operation.LIBRARY_EDIT, it, recovered = true) }
+                itemChangedHere = true
+                item = it
+                done()
+            }.onFailure {
+                val failure = failureOf(it)
+                FailureLog.record(FailureLog.Operation.LIBRARY_EDIT, failure)
+                choose(getString(title), listOf(getString(R.string.action_try_again), getString(R.string.action_cancel)),
+                    getString(failure.message)) { choice -> if (choice == 0) editLibrary(change, title, failure, done) }
+            }
+        }
     }
 
-    private fun saveAndRefresh(focusEpisodeId: String? = null, focusSeason: Int? = null) {
-        val entry = item ?: return
-        val snapshot = JSONObject(entry.toString())
-        background({ Stremio.saveLibrary(key, listOf(snapshot)) }) {}
+    private fun refreshAfterEdit(focusEpisodeId: String? = null, focusSeason: Int? = null) {
         fillGuide()
         meta?.let(::showHero)
         if (focusEpisodeId != null) {
@@ -788,43 +835,43 @@ class DetailsActivity : Screen() {
     }
 
     private fun markEpisodeWatched(video: Video, watched: Boolean) {
-        val entry = ensureLibraryItem()
         val videos = meta?.videos.orEmpty()
-        val s = entry.state
-        if (watched) {
-            Library.markWatched(entry, videos, video.id)
-            s.put("timesWatched", maxOf(1, s.optInt("timesWatched")))
-            val nextEp = Library.nextEpisode(videos, video)
-            if (nextEp != null) {
-                s.put("video_id", nextEp.id)
-                s.put("timeOffset", 0L)
-                s.put("flaggedWatched", 0)
+        editLibrary({ entry ->
+            val s = entry.state
+            if (watched) {
+                Library.markWatched(entry, videos, video.id)
+                s.put("timesWatched", maxOf(1, s.optInt("timesWatched")))
+                val nextEp = Library.nextEpisode(videos, video)
+                if (nextEp != null) {
+                    s.put("video_id", nextEp.id)
+                    s.put("timeOffset", 0L)
+                    s.put("flaggedWatched", 0)
+                } else {
+                    s.put("video_id", video.id)
+                    s.put("timeOffset", 0L)
+                    s.put("flaggedWatched", 1)
+                }
             } else {
+                Library.markUnwatched(entry, videos, video.id)
                 s.put("video_id", video.id)
                 s.put("timeOffset", 0L)
-                s.put("flaggedWatched", 1)
+                s.put("flaggedWatched", 0)
             }
-        } else {
-            Library.markUnwatched(entry, videos, video.id)
-            s.put("video_id", video.id)
-            s.put("timeOffset", 0L)
-            s.put("flaggedWatched", 0)
-        }
-        entry.put("_mtime", Library.now())
-        saveAndRefresh(focusEpisodeId = video.id)
+            entry.put("_mtime", Library.now())
+        }) { refreshAfterEdit(focusEpisodeId = video.id) }
     }
 
     private fun markPreviousEpisodesWatched(video: Video, prior: List<Video>) {
-        val entry = ensureLibraryItem()
         val videos = meta?.videos.orEmpty()
-        val s = entry.state
-        Library.markEpisodesWatched(entry, videos, prior.map { it.id })
-        s.put("timesWatched", maxOf(1, s.optInt("timesWatched")))
-        s.put("video_id", video.id)
-        s.put("timeOffset", 0L)
-        s.put("flaggedWatched", 0)
-        entry.put("_mtime", Library.now())
-        saveAndRefresh(focusEpisodeId = video.id)
+        editLibrary({ entry ->
+            val s = entry.state
+            Library.markEpisodesWatched(entry, videos, prior.map { it.id })
+            s.put("timesWatched", maxOf(1, s.optInt("timesWatched")))
+            s.put("video_id", video.id)
+            s.put("timeOffset", 0L)
+            s.put("flaggedWatched", 0)
+            entry.put("_mtime", Library.now())
+        }) { refreshAfterEdit(focusEpisodeId = video.id) }
     }
 
     private fun seasonMenu(season: Int) {
@@ -843,35 +890,35 @@ class DetailsActivity : Screen() {
     }
 
     private fun markSeasonWatched(season: Int, watched: Boolean) {
-        val entry = ensureLibraryItem()
         val videos = meta?.videos.orEmpty()
         val seasonVideos = videos.filter { it.season == season }
         val seasonIds = seasonVideos.map { it.id }.toSet()
-        val s = entry.state
+        editLibrary({ entry ->
+            val s = entry.state
 
-        if (watched) {
-            Library.markEpisodesWatched(entry, videos, seasonIds)
-            s.put("timesWatched", maxOf(1, s.optInt("timesWatched")))
-            val nextEp = Library.nextEpisodeAfterSeason(videos, season)
-            if (nextEp != null) {
-                s.put("video_id", nextEp.id)
-                s.put("timeOffset", 0L)
-                s.put("flaggedWatched", 0)
+            if (watched) {
+                Library.markEpisodesWatched(entry, videos, seasonIds)
+                s.put("timesWatched", maxOf(1, s.optInt("timesWatched")))
+                val nextEp = Library.nextEpisodeAfterSeason(videos, season)
+                if (nextEp != null) {
+                    s.put("video_id", nextEp.id)
+                    s.put("timeOffset", 0L)
+                    s.put("flaggedWatched", 0)
+                } else {
+                    seasonVideos.lastOrNull()?.let { s.put("video_id", it.id) }
+                    s.put("timeOffset", 0L)
+                    s.put("flaggedWatched", 1)
+                }
             } else {
-                seasonVideos.lastOrNull()?.let { s.put("video_id", it.id) }
-                s.put("timeOffset", 0L)
-                s.put("flaggedWatched", 1)
+                Library.unmarkEpisodesWatched(entry, videos, seasonIds)
+                seasonVideos.firstOrNull()?.let { firstEp ->
+                    s.put("video_id", firstEp.id)
+                    s.put("timeOffset", 0L)
+                    s.put("flaggedWatched", 0)
+                }
             }
-        } else {
-            Library.unmarkEpisodesWatched(entry, videos, seasonIds)
-            seasonVideos.firstOrNull()?.let { firstEp ->
-                s.put("video_id", firstEp.id)
-                s.put("timeOffset", 0L)
-                s.put("flaggedWatched", 0)
-            }
-        }
-        entry.put("_mtime", Library.now())
-        saveAndRefresh(focusSeason = season)
+            entry.put("_mtime", Library.now())
+        }) { refreshAfterEdit(focusSeason = season) }
     }
 
     /**
@@ -892,8 +939,9 @@ class DetailsActivity : Screen() {
                 intArrayOf(0xEB0E0C0A.toInt(), 0xD90E0C0A.toInt(), 0x990E0C0A.toInt()))
         }, FrameLayout.LayoutParams(-1, -1))
 
-        val facts = listOfNotNull(m.year, m.runtime,
-            m.genres.take(2).joinToString(" / ").ifEmpty { null }, m.rating?.let { "IMDb $it" }).joinToString(DOT)
+        val facts = (listOfNotNull(m.year, m.runtime,
+            m.genres.take(2).joinToString(" / ").ifEmpty { null }) +
+            shownRatings(Settings.ratings(this), m.rating, letterboxdScore).map { (source, value) -> "$source $value" }).joinToString(DOT)
 
         val content = column(Gravity.START).apply {
             clipChildren = false
@@ -1012,7 +1060,7 @@ class DetailsActivity : Screen() {
                 charView?.let { card.addView(it, LinearLayout.LayoutParams(dp(82), -2).apply { topMargin = dp(2) }) }
 
                 card.setOnFocusChangeListener { _, focused ->
-                    card.animate().scaleX(if (focused) 1.08f else 1f).scaleY(if (focused) 1.08f else 1f).setDuration(120).start()
+                    card.grow(focused).start()
                     ring.visibility = if (focused) View.VISIBLE else View.INVISIBLE
                     nameView.setTextColor(if (focused) 0xFFFBF8F5.toInt() else TEXT)
                     charView?.setTextColor(if (focused) TEXT else TEXT_2)
@@ -1049,7 +1097,7 @@ class DetailsActivity : Screen() {
         root.addView(infoOverlay, FrameLayout.LayoutParams(-1, -1))
         infoOverlay.alpha = 0f
         infoOverlay.translationY = dp(20).toFloat()
-        infoOverlay.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        infoOverlay.enter().alpha(1f).translationY(0f).start()
 
         if (focusCast && infoCastCards.isNotEmpty()) {
             infoCastCards.first().requestFocus()
@@ -1062,7 +1110,7 @@ class DetailsActivity : Screen() {
         infoOpen = false
         if (::infoOverlay.isInitialized) {
             val closing = infoOverlay
-            closing.animate().alpha(0f).translationY(dp(20).toFloat()).setDuration(180).withEndAction {
+            closing.exit().alpha(0f).translationY(dp(20).toFloat()).withEndAction {
                 root.removeView(closing)
                 if (!infoOpen) {
                     hero.visibility = View.VISIBLE
@@ -1177,13 +1225,13 @@ class DetailsActivity : Screen() {
         similarOverlay.visibility = View.VISIBLE
         similarOverlay.alpha = 0f
         similarOverlay.translationY = dp(20).toFloat()
-        similarOverlay.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        similarOverlay.enter().alpha(1f).translationY(0f).start()
         similarFirst?.requestFocus()
     }
 
     private fun hideSimilar() {
         similarOpen = false
-        similarOverlay.animate().alpha(0f).translationY(dp(20).toFloat()).setDuration(180).withEndAction {
+        similarOverlay.exit().alpha(0f).translationY(dp(20).toFloat()).withEndAction {
             similarOverlay.visibility = View.GONE
             hero.visibility = View.VISIBLE
             playButton.requestFocus()
@@ -1448,14 +1496,14 @@ class DetailsActivity : Screen() {
         filmographyOverlay.visibility = View.VISIBLE
         filmographyOverlay.alpha = 0f
         filmographyOverlay.translationY = dp(20).toFloat()
-        filmographyOverlay.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        filmographyOverlay.enter().alpha(1f).translationY(0f).start()
         filmographyFirst?.requestFocus()
     }
 
     private fun hideFilmography() {
         if (!filmographyOpen) return
         filmographyOpen = false
-        filmographyOverlay.animate().alpha(0f).translationY(dp(20).toFloat()).setDuration(180).withEndAction {
+        filmographyOverlay.exit().alpha(0f).translationY(dp(20).toFloat()).withEndAction {
             filmographyOverlay.visibility = View.GONE
             if (infoOpen) {
                 infoOverlay.visibility = View.VISIBLE
@@ -1565,13 +1613,14 @@ class DetailsActivity : Screen() {
     // Back from the player: progress, the resume point and My List may have changed.
     override fun onRestart() {
         super.onRestart()
-        background({ runCatching { Stremio.library(key, listOf(metaId)).firstOrNull() }.getOrNull() }) { result ->
+        background({ runCatching { Stremio.library(key, listOf(metaId)).firstOrNull() }.getOrNull()
+            ?: Stremio.savedLibrary(key)?.firstOrNull { it.optString("_id") == metaId } }) { result ->
             item = result.getOrNull() ?: item
             val wasGuide = guideOpen
             if (infoOpen) { root.removeView(infoOverlay); infoOpen = false }
             hero.visibility = View.VISIBLE
             showHero(meta)
-            meta?.videos?.takeIf { type == "series" && it.isNotEmpty() }?.let(::buildGuide)
+            meta?.videos?.takeIf { episodic && it.isNotEmpty() }?.let(::buildGuide)
             if (wasGuide) showGuide()
         }
     }
@@ -1634,8 +1683,8 @@ class DetailsActivity : Screen() {
             }
             if (!infoOpen && !similarOpen && !filmographyOpen && event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN &&
                 currentFocus?.let { isInside(it, hero) } == true &&
-                (if (type == "series") ::guide.isInitialized else ::similarOverlay.isInitialized)) {
-                if (type == "series") showGuide() else showSimilar()
+                (if (episodic) ::guide.isInitialized else ::similarOverlay.isInitialized)) {
+                if (episodic) showGuide() else showSimilar()
                 return true
             }
         }
@@ -1654,6 +1703,5 @@ class DetailsActivity : Screen() {
 
     private companion object {
         const val GUIDE_ART = 0.6f // the film's brightness behind the episode guide
-        const val STARTED = 60_000L // ms watched before a title counts as started
     }
 }

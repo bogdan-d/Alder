@@ -1,12 +1,8 @@
 package dev.alder
 
-import android.app.Dialog
-import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
-import android.view.inputmethod.EditorInfo
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -84,7 +80,7 @@ class AddonsActivity : Screen() {
         val key = authKey ?: return
         background({ Stremio.addons(key, refresh = true) }) { result ->
             result.onSuccess { addons = it; show() }
-                .onFailure { show(message = getString(R.string.addons_unreachable), retry = ::load) }
+                .onFailure { show(message = addonFailure(R.string.addons_unreachable, it), retry = ::load) }
         }
     }
 
@@ -210,38 +206,7 @@ class AddonsActivity : Screen() {
         if (actions.isNotEmpty()) choose(addonShortName(a.name), actions.map { it.first }) { n -> actions[n].second() }
     }
 
-    private fun askUrl() {
-        val dialog = Dialog(this).apply { requestWindowFeature(android.view.Window.FEATURE_NO_TITLE) }
-        val field = EditText(this).apply {
-            hint = "https://…/manifest.json"
-            setHintTextColor(TEXT_3)
-            setTextColor(TEXT)
-            textSize = BODY
-            setSingleLine()
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            background = glass(8)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-        }
-        dialog.setContentView(column(Gravity.START).apply {
-            setPadding(dp(20), dp(20), dp(20), dp(20))
-            background = glassOver(this, 14)
-            addView(text(R.string.addons_add_title, BODY, bold = true))
-            addView(field, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(14) })
-            addView(LinearLayout(this@AddonsActivity).apply {
-                gravity = Gravity.END
-                addView(chip(R.string.action_cancel).apply { setOnClickListener { dialog.dismiss() } })
-                addView(pill(R.string.action_add).apply {
-                    setOnClickListener { val url = field.text.toString().trim(); dialog.dismiss(); install(url) }
-                }, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
-            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
-        })
-        dialog.show()
-        dialog.window?.apply { setBackgroundDrawable(ColorDrawable(0)); setLayout(dp(400), -2); setDimAmount(0.6f) }
-        field.setOnEditorActionListener { _, _, _ ->
-            val url = field.text.toString().trim(); dialog.dismiss(); install(url); true
-        }
-        field.requestFocus()
-    }
+    private fun askUrl() = askText(R.string.addons_add_title, R.string.action_add, "https://…/manifest.json") { install(it) }
 
     // Stremio's install links are stremio://host/…/manifest.json; a bare addon address gets /manifest.json added.
     private fun install(typed: String) {
@@ -251,13 +216,14 @@ class AddonsActivity : Screen() {
             .let { if (it.endsWith("/manifest.json")) it else it.trimEnd('/') + "/manifest.json" }
         if (addons.any { it.transportUrl == url }) return show(url, getString(R.string.addons_already))
         background({
-            val manifest = JSONObject(Http.get(url))
+            require(java.net.URI(url).let { it.host != null && it.scheme.lowercase() in listOf("http", "https") })
+            val manifest = JSONObject(Http.get(url, strict = true))
             require(manifest.has("id") && manifest.has("resources")) { "That address isn't a Stremio addon." }
             Addon(JSONObject().put("transportUrl", url).put("manifest", manifest)
                 .put("flags", JSONObject().put("official", false).put("protected", false)))
         }) { result ->
             result.onSuccess { save(addons + it, url) }
-                .onFailure { show(ADD_URL, getString(R.string.addons_add_failed)) }
+                .onFailure { show(ADD_URL, addonFailure(R.string.addons_add_failed, it), retry = { install(typed) }) }
         }
     }
 
@@ -265,8 +231,14 @@ class AddonsActivity : Screen() {
         val key = authKey ?: return
         background({ Stremio.setAddons(key, next) }) { result ->
             result.onSuccess { addons = next; show(focus) }
-                .onFailure { show(focus, getString(R.string.addons_save_failed), retry = { save(next, focus) }) }
+                .onFailure { show(focus, addonFailure(R.string.addons_save_failed, it), retry = { save(next, focus) }) }
         }
+    }
+
+    private fun addonFailure(title: Int, error: Throwable): String {
+        val failure = failureOf(error)
+        FailureLog.record(FailureLog.Operation.ADD_ON, failure)
+        return failureMessage(title, failure)
     }
 
     private companion object { const val ADD_URL = "add-url" }

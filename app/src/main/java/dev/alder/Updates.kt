@@ -104,7 +104,7 @@ object Updates {
                 c.connectTimeout = 15_000
                 c.readTimeout = 30_000
                 if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
-                val expected = c.contentLengthLong
+                val expected = if (Build.VERSION.SDK_INT >= 24) c.contentLengthLong else c.contentLength.toLong()
                 val written = c.inputStream.use { input ->
                     session.openWrite("Alder.apk", 0, -1).use { out -> input.copyTo(out).also { session.fsync(out) } }
                 }

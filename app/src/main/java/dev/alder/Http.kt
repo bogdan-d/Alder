@@ -29,7 +29,10 @@ object Http {
     fun post(url: String, json: String, keep: Boolean = false, timeoutMs: Int = 20_000, headers: Map<String, String> = emptyMap()): String =
         text(url, json, keep, timeoutMs, false, headers)
 
-    fun bytes(url: String): ByteArray = request(url, null, cache = true).second
+    /** [strict]: an error answer throws [HttpError] instead of handing back its page. */
+    fun bytes(url: String, strict: Boolean = false): ByteArray = request(url, null, cache = true).let { (code, body) ->
+        if (strict && code >= 400) throw HttpError(code) else body
+    }
 
     private fun text(url: String, json: String?, keep: Boolean, timeoutMs: Int = 20_000, strict: Boolean = false, headers: Map<String, String> = emptyMap()): String {
         val (code, body) = request(url, json, cache = false, timeoutMs, headers)

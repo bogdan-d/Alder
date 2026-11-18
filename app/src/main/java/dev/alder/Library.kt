@@ -16,8 +16,15 @@ object Library {
     private const val WATCHED = 0.7 // stremio-core WATCHED_THRESHOLD_COEF: watched this much, it counts as seen
     private const val CREDITS = 0.9 // CREDITS_THRESHOLD_COEF: stopped past this, it's finished
 
-    fun continueWatching(items: List<JSONObject>): List<JSONObject> = items
-        .filter { it.optString("type") != "other" && (!it.optBoolean("removed") || it.optBoolean("temp")) && it.state.optLong("timeOffset") > 0 }
+    fun continueWatching(
+        items: List<JSONObject>,
+        unreleased: (JSONObject, String) -> Boolean = { _, _ -> false },
+    ): List<JSONObject> = items
+        .filter { it.optString("type") != "other" && (!it.optBoolean("removed") || it.optBoolean("temp")) }
+        .filter {
+            val videoId = savedVideoId(it)
+            if (nextEpisodePending(it)) !unreleased(it, videoId) else resumeAt(it, videoId) > 0
+        }
         .sortedByDescending { it.state.text("lastWatched") }
 
     /** A title that isn't in the library yet: Stremio keeps those as temporary, hidden items. */
@@ -67,14 +74,21 @@ object Library {
         item.put("_mtime", now())
     }
 
+    fun savedVideoId(item: JSONObject): String = item.state.text("video_id") ?: item.optString("_id")
+
+    /** A 1 ms offset points to the next episode without any playback progress. */
+    fun nextEpisodePending(item: JSONObject): Boolean =
+        item.state.optLong("timeOffset") == 1L && item.optString("type") != "movie" && item.state.text("video_id") != null
+
     /** Where to resume [videoId] in milliseconds, 0 to start from the beginning. */
     fun resumeAt(item: JSONObject, videoId: String): Long {
         val s = item.state
         val offset = s.optLong("timeOffset")
-        val duration = s.optLong("duration")
-        val unfinished = duration == 0L || offset < duration * CREDITS
-        return if (s.text("video_id") == videoId && offset > 0 && unfinished) offset else 0
+        if (s.text("video_id") == null && item.optString("type") != "movie") return 0
+        return if (savedVideoId(item) == videoId && offset > 1 && !pastCredits(offset, s.optLong("duration"))) offset else 0
     }
+
+    private fun pastCredits(offset: Long, duration: Long) = duration > 0 && offset >= duration * CREDITS
 
     /**
      * The episodes Stremio has ticked as watched, read from stremio-core's watched bitfield (`state.watched`):
@@ -190,7 +204,7 @@ object Library {
     /** When playback stops: past the credits it's finished, and a series moves on to [nextVideoId]. */
     fun stopped(item: JSONObject, nextVideoId: String?) {
         val s = item.state
-        if (s.optLong("duration") == 0L || s.optLong("timeOffset") <= s.optLong("duration") * CREDITS) return
+        if (!pastCredits(s.optLong("timeOffset"), s.optLong("duration"))) return
         s.put("timeOffset", 0)
         if (nextVideoId != null) {
             s.put("video_id", nextVideoId)

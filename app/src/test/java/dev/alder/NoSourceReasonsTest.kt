@@ -24,6 +24,14 @@ class NoSourceReasonsTest {
         assertTrue(reasons[0].startsWith("Torrentio found only torrents."))
     }
 
+    @Test fun underAListOnlyFixableReasons() {
+        val reasons = hiddenSourceReasons(names, arrayOf(null, HttpError(403), null), intArrayOf(12, 0, 0))
+        assertEquals(2, reasons.size)
+        assertTrue(reasons[0].startsWith("Couldn't get sources from MediaFusion"))
+        assertTrue(reasons[1].startsWith("Torrentio found only torrents."))
+        assertEquals(emptyList<String>(), hiddenSourceReasons(names, arrayOfNulls(3), intArrayOf(0, 0, 0)))
+    }
+
     @Test fun nothingAtAll() {
         assertEquals(listOf("Your add-ons have no sources for this title."),
             noSourceReasons(listOf("Torrentio"), arrayOf(null), intArrayOf(0), intArrayOf(0), 0))

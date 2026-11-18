@@ -122,7 +122,7 @@ object Images {
     fun frost(src: Bitmap, w: Int = 120): Bitmap {
         val h = maxOf(1, w * src.height / src.width)
         // Hardware bitmaps can't be read back; shrink in two steps, or the result gets grainy.
-        val soft = if (src.config == Bitmap.Config.HARDWARE) src.copy(Bitmap.Config.ARGB_8888, false) else src
+        val soft = if (src.onGpu()) src.copy(Bitmap.Config.ARGB_8888, false) else src
         val mid = Bitmap.createScaledBitmap(soft, maxOf(w, soft.width / 4), maxOf(h, soft.height / 4), true)
         if (soft !== src && soft !== mid) soft.recycle()
         val small = Bitmap.createScaledBitmap(mid, w, h, true)
@@ -172,7 +172,7 @@ object Images {
     // One copy per size: a card's small copy must never stand in for the full-screen art (it would be blurry).
     private fun key(url: String, widthPx: Int, look: Look? = null) = "$url#$widthPx" + (look?.name?.let { "#$it" } ?: "")
 
-    private fun decode(bytes: ByteArray, widthPx: Int, config: Bitmap.Config = Bitmap.Config.HARDWARE): Bitmap? {
+    private fun decode(bytes: ByteArray, widthPx: Int, config: Bitmap.Config = GPU_BITMAP): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1

@@ -1,6 +1,8 @@
 package dev.alder
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import androidx.media3.common.MimeTypes
 import org.junit.Test
 
 class ScreenDesignTest {
@@ -118,6 +120,14 @@ class ScreenDesignTest {
         assertEquals(emptyList<String>(), settledGenres(names, names.associateWith { false }))
     }
 
+    @Test fun genreShortcutsKeepEachAddOnQueryValue() {
+        assertEquals("Sci-Fi", genreLabel("science fiction"))
+        assertEquals("Sci-Fi", genreLabel(" sci-fi "))
+        assertEquals("Science Fiction", genreOption(listOf("Drama", "Science Fiction"), "Sci-Fi"))
+        assertEquals("sci-fi", genreOption(listOf("sci-fi"), "Sci-Fi"))
+        assertEquals(null, genreOption(listOf("Fantasy"), "Sci-Fi"))
+    }
+
     @Test fun catalogRowsHaveShortNames() {
         assertEquals("For you", shortRowName("Top Picks for You"))
         assertEquals("Popular", shortRowName("Trending Now"))
@@ -165,11 +175,45 @@ class ScreenDesignTest {
         assertEquals(false, isAddonMessage("The Authentication"))
     }
 
-    @Test fun myListKeepsTheLastPartialRow() {
-        assertEquals(0, listRowCount(0, 6))
-        assertEquals(1, listRowCount(6, 6))
-        assertEquals(2, listRowCount(7, 6))
-        assertEquals(4, listRowCount(24, 6))
+    @Test fun cardLoadWindowLimitsLoadedCardsAndUnloadsFarCards() {
+        val step = 120
+        val width = 960
+        val start = cardLoadWindow(0, width, step, 100)
+        assertEquals(0, start.loadStart)
+        assertEquals(14, start.loadEnd)
+        assertEquals(0, start.farLeftEnd)
+        assertEquals(20, start.farRightStart)
+
+        val middle = cardLoadWindow(50 * step, width, step, 100)
+        assertEquals(46, middle.loadStart)
+        assertEquals(64, middle.loadEnd)
+        assertEquals(38, middle.farLeftEnd)
+        assertEquals(70, middle.farRightStart)
+
+        val end = cardLoadWindow(95 * step, width, step, 100)
+        assertEquals(91, end.loadStart)
+        assertEquals(100, end.loadEnd)
+        assertEquals(83, end.farLeftEnd)
+        assertEquals(100, end.farRightStart)
+
+        // The pool runs the newest request first: the first card on the screen is asked for last.
+        assertEquals((8 until 14).toList() + (7 downTo 0).toList(), cardLoadOrder(start))
+        val order = cardLoadOrder(middle)
+        assertEquals(listOf(46, 47, 48, 49, 58), order.take(5))
+        assertEquals(50, order.last())
+        assertEquals((46 until 64).toSet(), order.toSet())
+    }
+
+    @Test fun libraryPostersFitSixAcrossAndTwoRowsWithAPeek() {
+        assertEquals(246, libraryPosterWidth(1728, 852, 24, 16, 32))
+        assertEquals(130, libraryPosterWidth(880, 620, 20, 12, 24))
+    }
+
+    @Test fun eachCatalogRowKeepsItsOwnPlace() {
+        assertEquals(0, landingCard(from = 5, nextSelected = 0, nextSize = 20, grid = false))
+        assertEquals(3, landingCard(from = 5, nextSelected = 3, nextSize = 20, grid = false))
+        assertEquals(5, landingCard(from = 5, nextSelected = 0, nextSize = 6, grid = true))
+        assertEquals(1, landingCard(from = 5, nextSelected = 0, nextSize = 2, grid = true))
     }
 
     @Test fun catalogsContinueAfterTheFirstTwentyInSmallBatches() {
@@ -505,6 +549,26 @@ class ScreenDesignTest {
         )
     }
 
+    @Test fun playerBadgesReadWidescreenAndPlayingTrack() {
+        fun res(w: Int, h: Int) = playerBadges(null, videoHeight = h, videoWidth = w).first().label
+        assertEquals("4K", res(3840, 1608))
+        assertEquals("4K", res(3836, 1600))
+        assertEquals("1080p", res(1920, 800))
+        assertEquals("1080p", res(1916, 1036))
+        assertEquals("720p", res(1280, 536))
+        assertEquals("1440p", res(2560, 1440))
+
+        val atmos = Stream("Torrentio 2160p", "Film.2160p.WEB-DL.DDP5.1.Atmos.mkv", "https://example.invalid/a.mkv",
+            emptyMap(), 0L, "Film.2160p.WEB-DL.DDP5.1.Atmos.mkv", null)
+        fun audio(s: Stream, mime: String?) = playerBadges(s, audioMime = mime).map { it.brand to it.label }
+        assertTrue(BadgeBrand.DOLBY to "ATMOS" in audio(atmos, MimeTypes.AUDIO_E_AC3))
+        assertTrue(audio(atmos, MimeTypes.AUDIO_AAC).none { it.first == BadgeBrand.DOLBY && it.second != "VISION" })
+
+        val dtsX = Stream("Comet 2160p", "Film.2160p.BluRay.REMUX.DTS:X.7.1.mkv", "https://example.invalid/x.mkv",
+            emptyMap(), 0L, "Film.2160p.BluRay.REMUX.DTS:X.7.1.mkv", null)
+        assertTrue(BadgeBrand.DTS to "X" in audio(dtsX, MimeTypes.AUDIO_DTS_HD))
+    }
+
     @Test fun playerBadgesEmptyWhenNoStreamOrTracks() {
         assertEquals(emptyList<PlayerBadge>(), playerBadges(null))
     }
@@ -517,6 +581,7 @@ class ScreenDesignTest {
 
     @Test fun subtitleColorResolvesCorrectly() {
         assertEquals(0xFFFFFFFF.toInt(), subtitleColorValue("white"))
+        assertEquals(0xFFBFBFBF.toInt(), subtitleColorValue("gray"))
         assertEquals(0xFFFFE600.toInt(), subtitleColorValue("yellow"))
         assertEquals(0xFF00FFFF.toInt(), subtitleColorValue("cyan"))
         assertEquals(0xFFFFF5C0.toInt(), subtitleColorValue("cream"))
@@ -524,5 +589,38 @@ class ScreenDesignTest {
         assertEquals(0xFFF3EEE6.toInt(), subtitleColorValue("warm white"))
         assertEquals(0xFFFFFFFF.toInt(), subtitleColorValue("unknown"))
         assertEquals(0xFFFFFFFF.toInt(), subtitleColorValue(""))
+    }
+
+    @Test fun initialRowCardsExceedsScreenViewportToPreventSnap() {
+        assertEquals(14, initialRowCards(wide = false))
+        assertEquals(9, initialRowCards(wide = true))
+    }
+
+    @Test fun wideRowPacesRepeatKeyScrollsToMatchPosterVelocity() {
+        assertEquals(false, shouldSkipRepeat(held = false, wide = true, repeatCount = 1))
+        assertEquals(false, shouldSkipRepeat(held = true, wide = false, repeatCount = 1))
+        assertEquals(true, shouldSkipRepeat(held = true, wide = true, repeatCount = 1))
+        assertEquals(false, shouldSkipRepeat(held = true, wide = true, repeatCount = 2))
+        assertEquals(true, shouldSkipRepeat(held = true, wide = true, repeatCount = 3))
+        assertEquals(100L, rowGlideDuration(held = true, wide = true, repeatDelay = 50L))
+        assertEquals(50L, rowGlideDuration(held = true, wide = false, repeatDelay = 50L))
+        assertEquals(200L, rowGlideDuration(held = false, wide = true, repeatDelay = 50L))
+    }
+
+    @Test fun backdropArtPostponesCrossfadeWhileHoldingRemote() {
+        assertEquals(0L, artDelay(held = false, cached = true, ready = false))
+        assertEquals(120L, artDelay(held = false, cached = false, ready = false))
+        assertEquals(280L, artDelay(held = true, cached = true, ready = false))
+        assertEquals(280L, artDelay(held = true, cached = false, ready = false))
+        assertEquals(0L, artDelay(held = true, cached = true, ready = true))
+    }
+
+    /** Motion comes from Screen.kt's tokens (FOCUS_MS, ENTER_MS, …): no screen picks its own duration. */
+    @Test fun screensUseMotionTokens() {
+        val code = java.io.File("src/main/java/dev/alder").takeIf { it.exists() } ?: java.io.File("app/src/main/java/dev/alder")
+        val literal = Regex("""setDuration\(\s*\d""")
+        val offenders = code.listFiles()!!.filter { it.name.endsWith("Activity.kt") }
+            .flatMap { f -> f.readLines().mapIndexedNotNull { i, line -> if (literal.containsMatchIn(line)) "${f.name}:${i + 1}" else null } }
+        org.junit.Assert.assertTrue("Use a motion token: $offenders", offenders.isEmpty())
     }
 }

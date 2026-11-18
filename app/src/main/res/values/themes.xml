@@ -4,5 +4,32 @@
     <style name="Alder" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:spotShadowAlpha">0.9</item>
         <item name="android:ambientShadowAlpha">0</item>
+        <item name="android:windowAnimationStyle">@style/Alder.Screens</item>
+    </style>
+
+    <!-- A screen drawn over another without stopping it (the source list over the player). Its own art covers it. -->
+    <style name="Alder.Over">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+
+    <!-- The player: the screen behind dims to black before the video fades up. -->
+    <style name="Alder.Player">
+        <item name="android:windowAnimationStyle">@style/Alder.Screens.Player</item>
+    </style>
+
+    <!-- Screen changes (design/DESIGN_SYSTEM.md "Motion"; durations match Screen.kt's PAGE_MS, QUICK_MS, IDLE_MS).
+         Window animations follow Android's transition scale, so Remove animations turns them off. -->
+    <style name="Alder.Screens" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/screen_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/screen_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/screen_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/screen_close_exit</item>
+    </style>
+
+    <style name="Alder.Screens.Player">
+        <item name="android:activityOpenEnterAnimation">@anim/player_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/lights_down</item>
+        <item name="android:activityCloseExitAnimation">@anim/screen_open_exit</item>
     </style>
 </resources>

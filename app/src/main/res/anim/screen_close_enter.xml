@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Back: the screen underneath comes forward from 103% (PAGE_MS, easing out). -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:duration="300" android:interpolator="@android:interpolator/decelerate_cubic">
+    <alpha android:fromAlpha="0" android:toAlpha="1" />
+    <scale android:fromXScale="1.03" android:toXScale="1" android:fromYScale="1.03" android:toYScale="1"
+        android:pivotX="50%" android:pivotY="50%" />
+</set>

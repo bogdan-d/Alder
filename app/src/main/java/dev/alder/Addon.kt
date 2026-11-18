@@ -71,19 +71,21 @@ class Addon(val descriptor: JSONObject) {
         val entry = manifest.optJSONArray("resources").items()
             .firstOrNull { (it as? String ?: (it as? JSONObject)?.optString("name")) == resource } ?: return false
         val own = entry as? JSONObject
+        // As stremio-core's is_resource_supported: a resource written out in full uses only its own prefixes (none
+        // means every id), and an empty list also means every id. Reading [] as "no id" left such add-ons unasked.
         val types = (own?.optJSONArray("types") ?: manifest.optJSONArray("types")).strings()
-        val prefixes = (own?.optJSONArray("idPrefixes") ?: manifest.optJSONArray("idPrefixes"))?.strings()
-        return type in types && (prefixes == null || prefixes.any { id.startsWith(it) })
+        val prefixes = (if (own != null) own.optJSONArray("idPrefixes") else manifest.optJSONArray("idPrefixes"))?.strings()
+        return type in types && (prefixes.isNullOrEmpty() || prefixes.any { id.startsWith(it) })
     }
 
     // Catalogs (one [genre] of them with Stremio's `genre` extra) and details are kept on disk as they arrive; the saved*
     // versions read last time's answer, no network.
     fun catalog(c: Catalog, genre: String? = null, timeoutMs: Int = 20_000): List<Meta> =
-        JSONObject(Http.get(catalogUrl(c, genre), true, timeoutMs)).optJSONArray("metas").objects().map(::Meta)
+        JSONObject(Http.get(catalogUrl(c, genre), true, timeoutMs, strict = true)).getJSONArray("metas").objects().map(::Meta)
 
     /** The titles after the first [skip] (Stremio's paging extra); not kept on disk. */
     fun catalog(c: Catalog, skip: Int): List<Meta> =
-        JSONObject(Http.get(catalogUrl(c, null, skip))).optJSONArray("metas").objects().map(::Meta)
+        JSONObject(Http.get(catalogUrl(c, null, skip), strict = true)).getJSONArray("metas").objects().map(::Meta)
 
     fun savedCatalog(c: Catalog, genre: String? = null): List<Meta>? =
         Http.savedAnswer(catalogUrl(c, genre))?.let { runCatching { JSONObject(it) }.getOrNull() }?.optJSONArray("metas")?.objects()?.map(::Meta)
@@ -97,7 +99,12 @@ class Addon(val descriptor: JSONObject) {
     }
 
     /** Every search catalog the addon advertises, as Stremio's catalog protocol specifies. */
-    fun search(query: String): List<Meta> {
+    fun search(query: String): List<Meta> = searchCatalogs(query).let { (titles, failure) ->
+        if (titles.isEmpty() && failure != null) throw failure
+        titles
+    }
+
+    internal fun searchCatalogs(query: String): Pair<List<Meta>, Throwable?> {
         require(query.isNotBlank())
         val catalogs = manifest.optJSONArray("catalogs").objects()
             .filter { c ->
@@ -111,27 +118,29 @@ class Addon(val descriptor: JSONObject) {
         fun fetch(c: JSONObject): List<Meta> {
             val path = url(arrayOf("catalog", c.getString("type"), c.getString("id"))).removeSuffix(".json")
             val searchUrl = "$path/search=${Uri.encode(query)}.json"
-            val answer = JSONObject(Http.get(searchUrl, timeoutMs = 5_000))
-            return (answer.optJSONArray("metas") ?: throw IOException("Search catalog failed")).objects().map(::Meta)
+            val answer = JSONObject(Http.get(searchUrl, timeoutMs = 5_000, strict = true))
+            return answer.getJSONArray("metas").objects().map(::Meta)
         }
         val completion = ExecutorCompletionService<Pair<Int, Result<List<Meta>>>>(catalogSearchPool)
         val pending = catalogs.mapIndexed { index, catalog -> completion.submit { index to runCatching { fetch(catalog) } } }
         val deadline = System.currentTimeMillis() + 5_000
         val answers = mutableListOf<Pair<Int, List<Meta>>>()
-        var succeeded = false
+        var failure: Throwable? = null
         try {
             repeat(catalogs.size) {
                 val finished = completion.poll((deadline - System.currentTimeMillis()).coerceAtLeast(0), TimeUnit.MILLISECONDS)
-                    ?: return@repeat
+                if (finished == null) {
+                    if (failure == null) failure = java.net.SocketTimeoutException()
+                    return@repeat
+                }
                 val (index, result) = finished.get()
-                result.getOrNull()?.let { succeeded = true; answers += index to it }
+                result.fold({ answers += index to it }, { if (failure == null) failure = it })
             }
         } finally { pending.forEach { it.cancel(true) } }
-        if (catalogs.isNotEmpty() && !succeeded) throw IOException("Search catalog unavailable")
-        return answers.sortedBy { it.first }.flatMap { it.second }
+        return answers.sortedBy { it.first }.flatMap { it.second } to failure
     }
 
-    fun meta(type: String, id: String): Meta? = get(true, "meta", type, id).optJSONObject("meta")?.let { meta(it, id) }
+    fun meta(type: String, id: String): Meta? = get(true, "meta", type, id, strict = true).optJSONObject("meta")?.let { meta(it, id) }
 
     fun savedMeta(type: String, id: String): Meta? = saved("meta", type, id)?.optJSONObject("meta")?.let { meta(it, id) }
 
@@ -151,31 +160,40 @@ class Addon(val descriptor: JSONObject) {
     }
 
     /**
-     * Playable streams only: torrent-only results (no url) need a streaming server, which this app doesn't have. An error
-     * answer throws [HttpError], so a refused key reads as that rather than as no sources; a 404 is just none.
+     * Include P2P sources only for the manual source list on supported devices. A 404 means no sources.
      */
-    fun streams(type: String, videoId: String): Streams {
+    fun streams(type: String, videoId: String, allowTorrents: Boolean = false): Streams {
         val all = try {
-            get(false, "stream", type, videoId, strict = true).optJSONArray("streams").objects()
+            // Debrid add-ons searching uncached titles (Comet, MediaFusion, AIOStreams) can take longer than 20 s.
+            JSONObject(Http.get(url(arrayOf("stream", type, videoId)), false, STREAM_WAIT, strict = true)).optJSONArray("streams").objects()
         } catch (e: HttpError) {
             if (e.code == 404) emptyList<JSONObject>() else throw e
         }
-        return Streams(all.mapNotNull { Stream.from(it) },
-            all.count { it.text("url") == null && it.text("infoHash") != null },
+        val playable = all.mapNotNull { Stream.from(it, allowTorrents) }
+        return Streams(playable,
+            all.count { stream -> stream.text("url")?.let(TorrentSource::isTorrentUrl) ?: (stream.text("infoHash") != null) } -
+                playable.count { it.torrent != null },
             all.count { it.text("url") == null && it.text("infoHash") == null && (it.text("externalUrl") ?: it.text("ytId")) != null })
     }
 
     /**
-     * What Alder can't play, counted to say why: [torrents], a torrent with no debrid link (an infoHash, no url), and
+     * What Alder can't play, counted to say why: [torrents], a torrent with no debrid link, and
      * [links], a page for a browser or a YouTube video (externalUrl, ytId).
      */
     class Streams(val playable: List<Stream>, val torrents: Int, val links: Int)
 
-    /** Subtitle files for one video (OpenSubtitles and co. through Stremio's `subtitles` resource). */
-    fun subtitles(type: String, videoId: String): List<Subtitle> =
-        get(false, "subtitles", type, videoId).optJSONArray("subtitles").objects().mapNotNull { s ->
+    /**
+     * Subtitle files for one video (OpenSubtitles and co. through Stremio's `subtitles` resource). The [stream]'s size
+     * and file name, when known, go along as Stremio's extras so the addon puts files made for that release first.
+     */
+    fun subtitles(type: String, videoId: String, stream: Stream? = null): List<Subtitle> {
+        val extras = subtitleExtras(stream?.filename, stream?.size ?: 0L)
+        val path = url(arrayOf("subtitles", type, videoId))
+        val request = if (extras.isEmpty()) path else path.removeSuffix(".json") + "/" + extras + ".json"
+        return JSONObject(Http.get(request, false)).optJSONArray("subtitles").objects().mapNotNull { s ->
             Subtitle(s.text("url") ?: return@mapNotNull null, s.text("lang") ?: "und", name)
         }
+    }
 
     // Ids such as "tt0903747:1:2" keep their colons, like Stremio's own requests.
     private fun url(path: Array<out String>) = base + "/" + path.joinToString("/") { Uri.encode(it, ":=") } + ".json"
@@ -184,7 +202,10 @@ class Addon(val descriptor: JSONObject) {
 
     private fun saved(vararg path: String) = Http.savedAnswer(url(path))?.let { runCatching { JSONObject(it) }.getOrNull() }
 
-    private companion object { val catalogSearchPool = Images.newestFirst(8) }
+    private companion object {
+        val catalogSearchPool by lazy { Images.newestFirst(8) } // lazy: unit tests make Addons without Android
+        const val STREAM_WAIT = 45_000 // ms
+    }
 }
 
 /**
@@ -194,13 +215,18 @@ class Addon(val descriptor: JSONObject) {
  * that waits on the answer: a dead add-on then costs no more than its own wait. Otherwise one at a time, so Home's
  * cards don't ask every add-on for every title.
  */
-fun List<Addon>.meta(type: String, id: String, together: Boolean = false): Meta? {
+fun List<Addon>.meta(type: String, id: String, together: Boolean = false, reportFailure: Boolean = false): Meta? {
     val serving = filter { it.serves("meta", type, id) }
     fun ask(a: Addon) = runCatching { a.meta(type, id) }
-        .onFailure { android.util.Log.w("Alder", "details from ${a.name} failed", it) }.getOrNull()
-        .also { if (it == null) android.util.Log.i("Alder", "no details for $type $id from ${a.name}") }
-    if (!together || serving.size < 2) return serving.firstNotNullOfOrNull(::ask)
-    return serving.map { a -> metaPool.submit<Meta?> { ask(a) } }.firstNotNullOfOrNull { it.get() }
+    val answers = if (!together || serving.size < 2) serving.asSequence().map(::ask)
+        else serving.map { a -> metaPool.submit<Result<Meta?>> { ask(a) } }.asSequence().map { it.get() }
+    var failure: Throwable? = null
+    for (answer in answers) {
+        answer.getOrNull()?.let { return it }
+        if (failure == null) failure = answer.exceptionOrNull()
+    }
+    if (reportFailure) failure?.let { throw it }
+    return null
 }
 
 /** Last time's details from disk, from the first add-on in the account's order that kept some; no network. */
@@ -297,15 +323,65 @@ class CastMember(
 class Video(val id: String, val title: String, val season: Int, val episode: Int, val thumbnail: String?,
             val overview: String?, val released: String?)
 
+internal fun episodeNumber(season: Int, episode: Int): String? =
+    if (season >= 0 && episode > 0) "S$season E$episode" else null
+
+private val episodeLabelPattern = Regex("""S(\d+) E(\d+)""")
+
+internal fun parseEpisodeLabel(label: String): Pair<Int, Int>? {
+    val match = episodeLabelPattern.matchEntire(label) ?: return null
+    val season = match.groupValues[1].toIntOrNull() ?: return null
+    val episode = match.groupValues[2].toIntOrNull()?.takeIf { it > 0 } ?: return null
+    return season to episode
+}
+
+internal fun episodeNumbers(videoId: String?): Pair<Int, Int>? {
+    val parts = videoId?.split(':') ?: return null
+    if (parts.size != 3 || parts[0].isBlank()) return null
+    val season = parts[1].toIntOrNull() ?: return null
+    val episode = parts[2].toIntOrNull() ?: return null
+    return (season to episode).takeIf { season >= 0 && episode > 0 }
+}
+
+/**
+ * Whether a title has episodes. A type is only a word an add-on picks ("anime", "channel", "podcast"), so for any type
+ * but movie, series and live, the title's own videos decide, as stremio-core does.
+ */
+internal fun hasEpisodes(type: String, videos: List<Video>?) = when {
+    type == "series" -> true
+    type == "movie" || isLiveType(type) -> false
+    else -> !videos.isNullOrEmpty()
+}
+
+/**
+ * Stremio's subtitle extras, "videoSize=1234&filename=Show.S01E02.mkv", or "" when neither is known (a size of 0 is
+ * unknown). Encoded like a URL path part, so a space is %20, not +.
+ */
+internal fun subtitleExtras(filename: String?, size: Long): String = listOfNotNull(
+    "videoSize=$size".takeIf { size > 0 },
+    filename?.takeIf { it.isNotBlank() }?.let { "filename=" + java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20") },
+).joinToString("&")
+
+/**
+ * A source ready to play: the link and headers the player reads, how long its first picture may take, and how to let it
+ * go. The player sees only this, so a torrent plays like a debrid link (see [Stream.open]).
+ */
+class Opened(
+    val url: String, val headers: Map<String, String>,
+    val startWait: Long? = null, val readTimeoutMs: Int = 8_000, val close: () -> Unit = {},
+)
+
 class Stream(
     val title: String, val description: String, val url: String, val headers: Map<String, String>,
     val size: Long, val filename: String?, val bingeGroup: String?,
+    val torrent: TorrentSource? = null,
 ) {
     /**
      * False for addon "actions" dressed up as streams, such as MyTrakt's "Mark Watched" (a 27 KB placeholder file).
-     * They're left out of the list and never picked. Unknown size counts as a video.
+     * They're left out of the list and never picked. Unknown size counts as a video. The line was 50 MB, which also
+     * hid real short videos (a 7-minute cartoon, a 480p anime episode) with no reason given.
      */
-    val isVideo get() = size == 0L || size >= 50L * 1024 * 1024
+    val isVideo get() = size == 0L || size >= 5L * 1024 * 1024
 
     /**
      * The addon's name for it on one line: "Torrentio (2160p)" becomes "Torrentio  ·  2160p". A debrid tag ("[RD+]")
@@ -315,7 +391,17 @@ class Stream(
         .replace(Regex("\\s*\\((.+?)\\)\\s*$"), "  ·  $1") + (debrid?.let { "  ·  ${it.name}" } ?: "")
 
     /** The debrid service it comes through, null for a direct link. */
-    val debrid: Debrid? = debridOf(title, url)
+    val debrid: Debrid? = if (torrent == null) debridOf(title, url) else null
+
+    /** Its link as the player gets it: at once for a link, through the engine for a torrent. Off the main thread. */
+    fun open(context: android.content.Context, episode: Pair<Int, Int>? = null): Opened =
+        torrent?.open(context, filename, episode) ?: Opened(url, headers)
+
+    /** True when [open] is instant (a link), so the player needn't wait for it on another thread. */
+    val opensAtOnce get() = torrent == null
+
+    /** Peers sharing it, as the add-on writes them ("👤 52"); null when it doesn't say. Matters only for P2P. */
+    val seeders: Int? = seedersIn("$title\n$description")
 
     // What the release is, read from its file name and the addon's labels (AIOStreams writes "2160p", "DV", "HEVC"
     // into them; the file name says it for every addon). ponytail: name matching, not the file's real tracks.
@@ -346,7 +432,8 @@ class Stream(
     private val hardSubs = Regex("\\bhc\\b|hardcoded|hardsub").containsMatchIn(words)
     /** 3D or subtitles burnt into the picture: picked last. */
     val awkward get() = threeD || hardSubs
-    val bigAudio = Regex("atmos|truehd|dts.?hd|dts.?x\\b").containsMatchIn(words) // what a receiver gains from
+    val trueHdAudio = "truehd" in words
+    val dtsHdAudio = Regex("dts.?hd").containsMatchIn(words)
     val multiAudio = Regex("\\b(multi|dual)\\b").containsMatchIn(words)
     val dubbed = Regex("\\bdub(bed)?\\b").containsMatchIn(words)
     /** The audio languages the names give, as two-letter codes; empty when they give none (see [audioLanguagesIn]). */
@@ -358,7 +445,7 @@ class Stream(
     val tags get() = listOfNotNull(
         "REMUX".takeIf { remux }, "BluRay".takeIf { bluray }, "WEB".takeIf { web && !remux && !bluray },
         "DV".takeIf { dolbyVision }, "HDR".takeIf { hdr }, "Atmos".takeIf { "atmos" in words },
-        "TrueHD".takeIf { "truehd" in words }, "DTS-HD".takeIf { Regex("dts.?hd").containsMatchIn(words) },
+        "TrueHD".takeIf { trueHdAudio }, "DTS-HD".takeIf { dtsHdAudio },
         "Multi audio".takeIf { multiAudio }, "Dub".takeIf { dubbed }, "3D".takeIf { threeD }, "Hard subs".takeIf { hardSubs },
     )
 
@@ -369,24 +456,30 @@ class Stream(
     fun playableOn(tv: Device): Boolean = (!hevc || tv.hevc) && (!av1 || tv.av1)
 
     /** How well it suits this TV, higher first: nothing above the screen's resolution, HDR only on an HDR screen. */
-    fun fit(tv: Device): Int = (if (height > tv.height) 0 else 2) + (if (hdr || dolbyVision) (if (tv.hdr) 0 else -1) else 0)
+    fun fit(tv: Device, displayHeight: Int): Int = (if (height > displayHeight) 0 else 2) +
+        (if ((hdr || dolbyVision) && !tv.hdr) -1 else 0)
 
     fun toJson(): JSONObject = JSONObject().put("name", title).put("description", description).put("url", url)
         .put("headers", JSONObject(headers)).put("size", size).put("filename", filename).put("binge", bingeGroup)
+        .apply { torrent?.let { put("torrent", it.toJson()) } }
 
     companion object {
-        fun from(json: JSONObject): Stream? {
-            val url = json.text("url") ?: return null
+        fun from(json: JSONObject, allowTorrents: Boolean = false): Stream? {
+            val url = json.text("url")?.takeUnless(TorrentSource::isTorrentUrl)
+            val torrent = if (url == null && allowTorrents) TorrentSource.from(json) else null
+            if (url == null && torrent == null) return null
             val hints = json.optJSONObject("behaviorHints")
             val headers = hints?.optJSONObject("proxyHeaders")?.optJSONObject("request")
             return Stream(
                 json.text("name") ?: "",
                 json.text("description") ?: json.text("title") ?: "",
-                url,
-                headers?.keys()?.asSequence()?.associateWith { headers.getString(it) } ?: emptyMap(),
-                hints?.optLong("videoSize") ?: 0L,
+                url.orEmpty(),
+                if (torrent != null) emptyMap() else headers?.keys()?.asSequence()?.associateWith { headers.getString(it) }.orEmpty(),
+                // Torrentio and most others write the size only in their text ("💾 4.35 GB"), not in videoSize.
+                hints?.optLong("videoSize")?.takeIf { it > 0 } ?: sizeIn("${json.text("description") ?: json.text("title")}\n${json.text("name")}"),
                 hints?.text("filename"),
                 hints?.text("bingeGroup"),
+                torrent,
             )
         }
 
@@ -395,7 +488,7 @@ class Stream(
             val headers = json.optJSONObject("headers") ?: JSONObject()
             return Stream(json.optString("name"), json.optString("description"), json.getString("url"),
                 headers.keys().asSequence().associateWith { headers.getString(it) }, json.optLong("size"),
-                json.text("filename"), json.text("binge"))
+                json.text("filename"), json.text("binge"), json.optJSONObject("torrent")?.let(TorrentSource::from))
         }
     }
 }
@@ -416,7 +509,11 @@ fun JSONArray?.strings(): List<String> = items().filterIsInstance<String>()
 internal fun audioLanguagesIn(text: String): Set<String> {
     val found = mutableSetOf<String>()
     // Regional indicators: two in a row make a country's flag, read in pairs so 🇺🇸🇪🇸 isn't also "SE".
-    val letters = text.codePoints().toArray().map { it - 0x1F1E6 }
+    // By hand: String.codePoints() needs Android 7.
+    val letters = buildList {
+        var at = 0
+        while (at < text.length) text.codePointAt(at).let { add(it - 0x1F1E6); at += Character.charCount(it) }
+    }
     var i = 0
     while (i < letters.size - 1) {
         if (letters[i] in 0..25 && letters[i + 1] in 0..25) {
@@ -449,8 +546,40 @@ private val languageWords = mapOf("english" to "en", "eng" to "en", "hindi" to "
 
 /** A debrid service ([short] as add-ons tag it, "RD"); [cached]: ready to start at once, null when the add-on doesn't say. */
 class Debrid(val name: String, val short: String, val cached: Boolean?) {
-    /** The source list's tag: "RD ⚡" when cached. */
-    val tag get() = if (cached == true) "$short ⚡" else short
+    /** The source list's tag: "RD ⚡" when cached (starts at once), "RD ⏳" when the service must download it first. */
+    val tag get() = when (cached) { true -> "$short ⚡"; false -> "$short ⏳"; null -> short }
+}
+
+private val sizeText = Regex("(\\d+(?:[.,]\\d+)?)\\s*(GB|GiB|MB|MiB)\\b(?!/)", RegexOption.IGNORE_CASE)
+
+/** A file size from an add-on's text, the one after 💾 first: "💾 4.35 GB" is 4_350_000_000. 0 when none. */
+internal fun sizeIn(text: String): Long {
+    val m = text.substringAfter("💾", "").let(sizeText::find) ?: sizeText.find(text) ?: return 0
+    val n = m.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return 0
+    return (n * if (m.groupValues[2].startsWith("G", ignoreCase = true)) 1e9 else 1e6).toLong()
+}
+
+/** Seeders from an add-on's text: Torrentio writes "👤 52", others "👥 52". */
+internal fun seedersIn(text: String): Int? = Regex("(?:👤|👥)\\s*(\\d+)").find(text)?.groupValues?.get(1)?.toIntOrNull()
+
+/** The audio as a viewer reads it: "Atmos 7.1", "DD+ 5.1", "AAC 2.0"; null when the names don't say. */
+internal fun audioSummary(words: String): String? {
+    val format = when {
+        "atmos" in words -> "Atmos"
+        "truehd" in words -> "TrueHD"
+        Regex("dts.?x\\b").containsMatchIn(words) -> "DTS:X"
+        Regex("dts.?hd").containsMatchIn(words) -> "DTS-HD"
+        Regex("\\bdts").containsMatchIn(words) -> "DTS"
+        Regex("\\b(ddp|dd\\+|e-?ac-?3)").containsMatchIn(words) -> "DD+"
+        Regex("\\b(dd|ac-?3)(?![a-z])").containsMatchIn(words) -> "DD"
+        Regex("\\baac").containsMatchIn(words) -> "AAC"
+        Regex("\\bflac").containsMatchIn(words) -> "FLAC"
+        Regex("\\bopus\\b").containsMatchIn(words) -> "Opus"
+        else -> null
+    }
+    val channels = Regex("(?<!\\d)([1257])[ ._]([01])(?![\\d])").find(words)?.let { "${it.groupValues[1]}.${it.groupValues[2]}" }
+        ?: "2.0".takeIf { "stereo" in words } ?: "Mono".takeIf { Regex("\\bmono\\b").containsMatchIn(words) }
+    return listOfNotNull(format, channels).joinToString(" ").ifEmpty { null }
 }
 
 private val debridServices = listOf(

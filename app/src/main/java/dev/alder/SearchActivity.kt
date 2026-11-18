@@ -66,6 +66,8 @@ class SearchActivity : Screen() {
     private lateinit var heroTag: TextView
     private lateinit var heroScore: TextView
     private lateinit var keyboard: LinearLayout
+    private lateinit var nav: LinearLayout
+    private var navTabIds = emptyList<String>()
     private val characterKeys = mutableListOf<TextView>()
     private val rightEdgeKeys = mutableSetOf<View>()
     private val cards = mutableListOf<Pair<View, View>>()
@@ -179,7 +181,7 @@ class SearchActivity : Screen() {
         heroLogo = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_START }
         heroName = text("", 48f, serif = true).onArt().apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
         heroFacts = text("", SMALL, color = TEXT_2).onArt()
-        heroTag = imdbTag()
+        heroTag = ratingTag()
         heroScore = text("", SMALL, color = TEXT_2).onArt()
         heroAbout = text("", BODY, color = TEXT).onArt().apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
         hero = column(Gravity.START).apply {
@@ -240,6 +242,11 @@ class SearchActivity : Screen() {
         cursor.translationX = input.paddingStart + input.paint.measureText(input.text.toString())
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::nav.isInitialized) updateNavTabs()
+    }
+
     private fun header(): View {
         val profile = Profiles.active(this)
         val bar = FrameLayout(this).apply { setPadding(dp(48), 0, dp(48), 0) }
@@ -260,7 +267,7 @@ class SearchActivity : Screen() {
             }
         }
         bar.addView(avatar, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.START or Gravity.CENTER_VERTICAL))
-        val nav = LinearLayout(this).apply {
+        nav = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
@@ -277,9 +284,35 @@ class SearchActivity : Screen() {
             setOnClickListener { input.requestFocus() }
         }
         nav.addView(searchTab, LinearLayout.LayoutParams(dp(44), dp(30)))
+        updateNavTabs()
+        nav.background = glassOver(nav, 20, shade = FROST_READING)
+        bar.addView(nav, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+        bar.addView(TextClock(this).apply {
+            format12Hour = "h:mm a"
+            format24Hour = "HH:mm"
+            textSize = SMALL
+            setTextColor(TEXT_2)
+            typeface = text("", SMALL).typeface
+        }, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL))
+        return bar
+    }
+
+    private fun updateNavTabs() {
         // The page goes to MainActivity by its English name; the bar shows it in the viewer's language.
-        listOf("Home" to R.string.tab_home, "Shows" to R.string.tab_shows, "Movies" to R.string.tab_movies,
-            "My List" to R.string.tab_my_list).forEach { (page, words) ->
+        val pages = mapOf(
+            "home" to ("Home" to R.string.tab_home),
+            "shows" to ("Shows" to R.string.tab_shows),
+            "movies" to ("Movies" to R.string.tab_movies),
+            "library" to ("My List" to R.string.tab_my_list),
+        )
+        val visible = orderTabs(Settings.tabOrder(this), tabsFor(emptyList())).filter { Settings.tabShown(this, it) }
+        val ids = listOf("home") + visible
+        if (ids == navTabIds) return
+        val focusedId = nav.focusedChild?.let { navTabIds.getOrNull(nav.indexOfChild(it) - 1) }
+        navTabIds = ids
+        nav.removeViews(1, nav.childCount - 1)
+        ids.forEach { id ->
+            val (page, words) = pages.getValue(id)
             nav.addView(text(words, BODY, color = TEXT_2).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(12), 0, dp(12), 0)
@@ -296,16 +329,7 @@ class SearchActivity : Screen() {
                 }
             }, LinearLayout.LayoutParams(-2, dp(30)).apply { marginStart = dp(4) })
         }
-        nav.background = glassOver(nav, 20, shade = FROST_READING)
-        bar.addView(nav, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
-        bar.addView(TextClock(this).apply {
-            format12Hour = "h:mm a"
-            format24Hour = "HH:mm"
-            textSize = SMALL
-            setTextColor(TEXT_2)
-            typeface = text("", SMALL).typeface
-        }, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.CENTER_VERTICAL))
-        return bar
+        if (focusedId != null) nav.getChildAt(ids.indexOf(focusedId) + 1).requestFocus()
     }
 
     private fun buildKeyboard() {
@@ -466,7 +490,7 @@ class SearchActivity : Screen() {
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
     }
 
-    private fun search(moveFocus: Boolean) {
+    private fun search(moveFocus: Boolean, previous: Failure? = null) {
         val query = input.text.toString().trim()
         val token = ++request
         searchTasks.forEach { it.cancel(true) }
@@ -503,13 +527,15 @@ class SearchActivity : Screen() {
         background({ Stremio.savedAddons(authKey.orEmpty()) ?: Stremio.addons(authKey.orEmpty()) }) { loaded ->
             if (token != request) return@background
             val addons = loaded.getOrElse {
+                val failure = failureOf(it)
+                FailureLog.record(FailureLog.Operation.SEARCH, failure)
                 results.removeAllViews()
-                results.addView(failed(getString(R.string.search_unavailable)) { search(false) })
+                results.addView(failed(failureMessage(R.string.search_unavailable, failure)) { search(true, failure) })
                 return@background
             }
             val answers = arrayOfNulls<List<Meta>>(addons.size)
             var completed = 0
-            var failedCount = 0
+            val failures = arrayOfNulls<Failure>(addons.size)
             var finished = false
             fun update(final: Boolean = false) {
                 if (token != request || finished) return
@@ -520,24 +546,37 @@ class SearchActivity : Screen() {
                 val ranked = rankSearchTitles(found, query) { it.name }
                 val sections = linkedMapOf(getString(R.string.tab_movies) to ranked.filter { it.type == "movie" }.take(PER_TYPE),
                     getString(R.string.tab_shows) to ranked.filter { it.type == "series" }.take(PER_TYPE)).filterValues { it.isNotEmpty() }
-                if (sections.isNotEmpty()) render(sections, query, moveFocus && (final || completed == addons.size))
-                else if (final || completed == addons.size) {
+                val settled = final || completed == addons.size
+                if (sections.isNotEmpty()) render(sections, query, moveFocus && settled)
+                if (!settled) return
+                val failure = searchFailure(failures.filterNotNull(), completed, addons.size)
+                if (sections.isEmpty()) {
                     results.removeAllViews()
-                    results.addView(if (failedCount == completed && (completed > 0 || final))
-                        failed(getString(R.string.search_unavailable)) { search(false) }
-                    else text(R.string.search_no_matches, BODY, color = TEXT_2))
                     resultCount.text = ""
+                }
+                if (failure != null) {
+                    FailureLog.record(FailureLog.Operation.SEARCH, failure)
+                    val message = if (sections.isEmpty() && answers.all { it == null }) R.string.search_unavailable else R.string.search_incomplete
+                    val card = failed(failureMessage(message, failure)) { search(true, failure) }
+                    results.addView(card)
+                    if (moveFocus && sections.isEmpty()) card.getChildAt(2).requestFocus()
+                } else {
+                    previous?.let { FailureLog.record(FailureLog.Operation.SEARCH, it, recovered = true) }
+                    if (sections.isEmpty()) results.addView(text(R.string.search_no_matches, BODY, color = TEXT_2))
                 }
             }
             if (addons.isEmpty()) { update(true); return@background }
             main.postDelayed({ if (token == request) { update(true); finished = true } }, SEARCH_WAIT)
             addons.forEachIndexed { index, addon ->
                 searchTasks += searchPool.submit {
-                    val answer = runCatching { addon.search(query) }
+                    val answer = runCatching { addon.searchCatalogs(query) }
                     main.post {
                         if (isDestroyed || token != request || finished) return@post
                         completed++
-                        answer.fold({ answers[index] = it }) { failedCount++ }
+                        answer.fold({ (titles, error) ->
+                            answers[index] = titles
+                            failures[index] = error?.let(::failureOf)
+                        }, { failures[index] = failureOf(it) })
                         update()
                         if (completed == addons.size) finished = true
                     }
@@ -628,7 +667,7 @@ class SearchActivity : Screen() {
                 scroller.clipToPadding = true
                 resultsScroll.clipChildren = true
                 resultsScroll.clipToPadding = true
-                shade.animate().alpha(if (has) 0f else 0.5f).setDuration(150).start()
+                shade.animate().alpha(if (has) 0f else 0.5f).setDuration(FOCUS_MS).start()
                 if (has) {
                     // The focused row snaps to the pane's top, as on Home: scrolling just far enough left Shows cut off.
                     // Rows above it draw nothing: the pane didn't clip them, and they sat over the title's words.
@@ -643,7 +682,7 @@ class SearchActivity : Screen() {
                     val row = parent as ViewGroup
                     val target = (left - row.paddingStart).coerceIn(0, (row.width - scroller.width).coerceAtLeast(0))
                     scroller.smoothScrollTo(target, 0)
-                    for (i in 0 until row.childCount) row.getChildAt(i).let { it.animate().alpha(if (it.left < target + row.paddingStart - 1) 0f else 1f).setDuration(150).start() }
+                    for (i in 0 until row.childCount) row.getChildAt(i).let { it.animate().alpha(if (it.left < target + row.paddingStart - 1) 0f else 1f).setDuration(FOCUS_MS).start() }
                     caption.post {
                         caption.translationX = (left - target).toFloat()
                             .coerceIn(0f, (scroller.width - dp(48) - caption.width).coerceAtLeast(0).toFloat())
@@ -686,7 +725,7 @@ class SearchActivity : Screen() {
                     refrost()
                 }
             }) {
-                if (focused === meta) { art.animate().alpha(1f).setDuration(300).start(); refrost() }
+                if (focused === meta) { art.enter(PAGE_MS).alpha(1f).start(); refrost() }
             }
         } else if (url == null) {
             art.tag = null

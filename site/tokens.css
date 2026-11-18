@@ -1,29 +1,33 @@
+/* House Lights tokens, shared with the Alder apps (design/DESIGN_SYSTEM.md "Tokens"). */
 :root {
   --color-night: #0e0c0a;
-  --color-night-raised: #211b16;
-  --color-paper: #eee8de;
-  --color-paper-deep: #ded4c6;
-  --color-ink: #292019;
+  --color-night-raised: #17130f;
   --color-cream: #f3eee6;
+  --color-cream-soft: #d6cbbd;
   --color-tungsten: #f3d9b1;
-  --color-muted-dark: #b9aa99;
-  --color-muted-light: #62574b;
-  --color-rule-dark: #4a4036;
-  --color-rule-light: #c3b9aa;
+  --color-muted: #b9aa99;
+  --color-faint: #857869;
+  --color-rule: #332b24;
+  --color-bezel: #050403;
+  --color-walnut: #4a3020;
+  --color-walnut-light: #6b4a32;
   --color-focus: #f3d9b1;
+
+  --glass-fill: rgba(30, 24, 19, .4);
+  --glass-blur: 22px;
+  --glass-edge: rgba(243, 238, 230, .09);
+  --glass-highlight: rgba(243, 238, 230, .14);
+  --glow-tungsten: 0 0 10px rgba(243, 217, 177, .9);
+  --glow-screen: 0 0 120px -20px rgba(160, 180, 175, .28);
+
   --font-display: "Instrument Serif", Georgia, serif;
-  --font-body: Inter, Arial, sans-serif;
-  --space-xs: .5rem;
-  --space-sm: 1rem;
-  --space-md: 1.5rem;
-  --space-lg: 2rem;
-  --space-xl: 3rem;
-  --space-2xl: 5rem;
-  --space-3xl: 8rem;
-  --text-small: .8125rem;
-  --text-body: 1rem;
-  --text-large: 1.25rem;
+  --font-body: Inter, system-ui, sans-serif;
+
+  --radius-pill: 999px;
+  --radius-card: 18px;
+  --radius-tv: 4px;
+
   --ease-out: cubic-bezier(.16, 1, .3, 1);
   --dur-short: 220ms;
-  --radius-image: 4px;
+  --dur-scene: 900ms;
 }

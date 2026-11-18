@@ -6,8 +6,9 @@
 </p>
 
 <p align="center">
-  <a href="https://aradhyas8.github.io/Alder/">Website</a> ·
+  <a href="https://aradhyas8.github.io/Alder/"><img alt="Website" src="https://img.shields.io/badge/Website-blue"></a>
   <a href="https://github.com/aradhyas8/Alder/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/aradhyas8/Alder?label=release"></a>
+  <a href="https://github.com/aradhyas8/Alder/releases"><img alt="Total GitHub release downloads" src="https://img.shields.io/github/downloads/aradhyas8/Alder/total?label=Downloads"></a>
   <img alt="Android TV 8.0+" src="https://img.shields.io/badge/Android%20TV-8.0%2B-3ddc84">
   <a href="LICENSE"><img alt="GPL-3.0 License" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
@@ -27,7 +28,7 @@ Alder makes that choice for them:
 - **Press Play, it plays.** Alder picks the best source for your TV and starts it. Hold OK when you want to choose yourself.
 - **Dead links don't stop the film.** If a stream fails or shows no picture within 12 seconds, Alder moves to the next one from the same second. You only see the list if three fail in a row.
 - **It knows your TV.** Files your TV can't decode are left out before anyone sees them, including Dolby Vision profiles it can't show and 4K on a 1080p screen.
-- **Sound that works.** DTS and TrueHD play on any TV. The starting track is the original language, not a dub or a commentary. If a track breaks mid-film, the next best one takes over at the same second.
+- **Automatic audio output.** Alder sends TrueHD and DTS-HD to audio devices that support those formats. If passthrough fails, Alder tries to decode the same track to PCM at the same position before it changes tracks or sources.
 - **Everyone gets their own profile.** Up to 5, each its own Stremio account with its own history and recommendations, and an optional PIN.
 
 ## A look around
@@ -67,8 +68,8 @@ Alder can also show Continue Watching on the Google TV home screen, skip intros 
 | Skip intro | ✅ | ❌ |
 | Continue Watching on the Google TV home | ✅ | ❌ |
 | Finding and configuring add-ons | In Stremio on your phone or computer, synced to the TV | On the TV, or on your phone or computer, synced to the TV |
-| Torrent streaming | ❌ Debrid only | ✅ |
-| App size | **About 5 MB** | Much larger, with a streaming server |
+| Torrent streaming | ✅ P2P sources on Android 7 or newer, after debrid ones | ✅ |
+| App size | **About 24 MB** (5 MB without the P2P engine) | Much larger, with a streaming server |
 | Built for | **A TV and a remote** | Shared with desktop and web |
 
 ## How it fits with Stremio
@@ -80,10 +81,12 @@ You keep using Stremio. Alder is the part you sit in front of.
 
 Alder has no add-on store. Setting up add-ons means typing and web forms, which is easier on a phone than with a remote.
 
+On Android 7 or newer, sources marked **P2P** play torrents from your add-ons. Alder tries them after debrid and direct sources. P2P playback connects your TV to torrent peers, which can see its public IP address.
+
 ## Requirements
 
 - Android TV, Google TV, or Fire TV running **Android 6.0 (Marshmallow, Fire OS 6) or newer**
-- A Stremio account with **debrid** stream add-ons (for example AIOStreams with Real-Debrid), set up in Stremio on your phone or computer
+- A Stremio account with stream add-ons, set up in Stremio on your phone or computer
 - A way to sideload an APK: the *Downloader* app, a USB drive with a file manager, or `adb`
 
 ## Install
@@ -125,3 +128,5 @@ Alder is not affiliated with Stremio.
 Copyright (C) 2026 aradhyas8
 
 Alder is free software, released under the [GNU General Public License v3.0](LICENSE).
+
+P2P playback uses [Nuvio Engine v0.1.6 source](https://github.com/NuvioMedia/nuvio-engine/tree/v0.1.6) under GPL-3.0-or-later. The APK includes the [engine and dependency licenses](app/src/main/assets/licenses/nuvio-engine).

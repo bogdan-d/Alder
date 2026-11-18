@@ -20,7 +20,8 @@ object Profiles {
         migrate(prefs)
         return JSONArray(prefs.getString("profiles", "[]")).objects()
             .map { Profile(it.getString("id"), it.getString("name"), it.getInt("color").takeIf { c -> c in COLORS } ?: COLORS[0],
-                it.getString("authKey"), it.optString("pin").ifEmpty { null }) }
+                // "credential": profiles saved by a newer build (modular accounts) after a downgrade; reading only "authKey" crashed launch.
+                it.optString("authKey").ifEmpty { it.getString("credential") }, it.optString("pin").ifEmpty { null }) }
     }
 
     /** The profile in use: the one picked last, or the only one there is. */

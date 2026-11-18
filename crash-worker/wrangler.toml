@@ -1,0 +1,9 @@
+name = "alder-crash"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+
+# Each TV (by IP) may send 3 reports a minute; more get 429.
+[[ratelimits]]
+name = "LIMIT"
+namespace_id = "1001"
+simple = { limit = 3, period = 60 }

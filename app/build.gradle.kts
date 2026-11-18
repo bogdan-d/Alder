@@ -1,10 +1,12 @@
 import java.util.Properties
+import java.net.URI
+import java.security.MessageDigest
 
 plugins {
     id("com.android.application")
 }
 
-// Framework Views only, like Plume. The only libraries are for playback: Media3 (ExoPlayer) and an ffmpeg audio decoder.
+// Framework Views only, like Plume. Media3, FFmpeg and Nuvio Engine handle playback.
 android {
     namespace = "dev.alder"
     compileSdk = 36
@@ -71,7 +73,34 @@ androidComponents {
 // Media3 stays on the version Jellyfin's ffmpeg decoder is built against: its native glue targets one exact release.
 val media3 = "1.9.0"
 
+val torrentEngineVersion = "0.1.6"
+val torrentEngineFile = "nuvio-engine-android-$torrentEngineVersion.aar"
+val torrentEngine = tasks.register("downloadTorrentEngine") {
+    val artifact = layout.buildDirectory.file("dependencies/$torrentEngineFile")
+    val sha256 = "66b049a3625bfdc39c3b5d25a0af9bbc127c530512617e9f57cd988c019d33d6"
+    inputs.property("sha256", sha256)
+    outputs.file(artifact)
+    doLast {
+        val file = artifact.get().asFile
+        fun matches(bytes: ByteArray) =
+            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) } == sha256
+        if (file.isFile && matches(file.readBytes())) return@doLast
+        check(!gradle.startParameter.isOffline) { "Build online once to download $torrentEngineFile." }
+        val url = "https://github.com/NuvioMedia/nuvio-engine/releases/download/v$torrentEngineVersion/$torrentEngineFile"
+        val connection = URI(url).toURL().openConnection().apply {
+            connectTimeout = 20_000
+            readTimeout = 30_000
+        }
+        val bytes = connection.getInputStream().use { it.readBytes() }
+        check(matches(bytes)) { "$torrentEngineFile failed SHA-256 verification." }
+        file.parentFile.mkdirs()
+        file.writeBytes(bytes)
+    }
+}
+
 dependencies {
+    implementation(files(torrentEngine))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3") // live and sports addons stream HLS
     implementation("androidx.media3:media3-ui:$media3")

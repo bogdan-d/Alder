@@ -14,7 +14,7 @@ import org.w3c.dom.Element
 class TranslationStringsTest {
     private val res = File("src/main/res").takeIf { it.exists() } ?: File("app/src/main/res")
     private val code = File(res.parentFile, "java/dev/alder")
-    private val locales = listOf("es", "pt", "fr", "de", "it", "hi")
+    private val locales = listOf("es", "pt", "fr", "de", "it", "hi", "ar")
 
     /** "string:name" (and "plurals:name#one", "array:name[0]") to its text, as Android reads it. */
     private fun words(folder: String): Map<String, String> {
@@ -60,7 +60,21 @@ class TranslationStringsTest {
                 val forms = theirs.filterKeys { it.substringBefore('#') == plural }
                 assertTrue("values-$locale is missing $plural#other", forms.containsKey("$plural#other"))
                 val want = placeholders(english.getValue("$plural#other"))
-                forms.forEach { (key, text) -> assertEquals("Placeholders differ in values-$locale for $key", want, placeholders(text)) }
+                if (locale == "ar") {
+                    assertEquals(
+                        "Arabic plural forms for $plural",
+                        setOf("zero", "one", "two", "few", "many", "other"),
+                        forms.keys.map { it.substringAfter('#') }.toSet()
+                    )
+                }
+                for ((key, text) in forms) {
+                    assertTrue("values-$locale has a blank $key", text.isNotBlank())
+                    // Arabic spells out the count in the zero, singular and dual forms.
+                    val expected = if (locale == "ar" && key.substringAfter('#') in setOf("zero", "one", "two"))
+                        want - "%1\$d"
+                    else want
+                    assertEquals("Placeholders differ in values-$locale for $key", expected, placeholders(text))
+                }
             }
             val extra = theirs.keys.map { it.substringBefore('#') } - english.keys.map { it.substringBefore('#') }.toSet()
             assertTrue("values-$locale has words English doesn't: $extra", extra.isEmpty())

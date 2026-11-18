@@ -6,8 +6,6 @@ on:
     paths:
       - '.github/workflows/pages.yml'
       - 'site/**'
-      - 'docs/home-dune.png'
-      - 'docs/title.png'
       - 'docs/sources.jpg'
       - 'docs/tracks.jpg'
       - 'docs/picker.jpg'

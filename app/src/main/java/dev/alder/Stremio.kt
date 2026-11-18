@@ -62,23 +62,35 @@ object Stremio {
 
     /** Library items (watch history included): the given ids, or every item when [ids] is empty. */
     fun library(authKey: String, ids: List<String> = emptyList()): List<JSONObject> {
+        return newest(authKey, ids, readLibrary(authKey, ids))
+    }
+
+    private fun readLibrary(authKey: String, ids: List<String>): List<JSONObject> {
         val body = libraryBody(authKey, ids)
         val answer = Http.post(API + "datastoreGet", body)
-        if (ids.isEmpty()) Http.keep(API + "datastoreGet", body, answer)
-        return newest(authKey, libraryItems(answer))
+        return libraryItems(answer).also { if (ids.isEmpty()) Http.keep(API + "datastoreGet", body, answer) }
     }
 
     // Items saved here whose save may not have reached Stremio yet: the player saves as it closes, and the page behind
     // it asks Stremio at the same moment, so without this it showed the progress from before.
     private val saving = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
 
-    private fun newest(authKey: String, items: List<JSONObject>) = items.map { item ->
-        saving["$authKey/${item.optString("_id")}"]?.takeIf { it.optString("_mtime") > item.optString("_mtime") } ?: item
+    private fun newest(authKey: String, ids: List<String>, items: List<JSONObject>): List<JSONObject> {
+        val pending = ProgressSaves.pending(authKey).values.map(::JSONObject)
+        val latest = items.associateByTo(linkedMapOf()) { it.optString("_id") }
+        pending.filter { ids.isEmpty() || it.optString("_id") in ids }.forEach { item ->
+            val id = item.optString("_id")
+            if (newerProgress(item, latest[id])) latest[id] = applyProgress(item, latest[id])
+        }
+        return latest.map { (id, item) -> saving["$authKey/$id"]?.takeIf { newerProgress(it, item) } ?: item }
     }
 
     /** The whole library as it was last time, from disk, or null. */
-    fun savedLibrary(authKey: String): List<JSONObject>? = Http.savedAnswer(API + "datastoreGet", libraryBody(authKey, emptyList()))
-        ?.let { runCatching { newest(authKey, libraryItems(it)) }.getOrNull() }
+    fun savedLibrary(authKey: String): List<JSONObject>? {
+        val cached = Http.savedAnswer(API + "datastoreGet", libraryBody(authKey, emptyList()))
+            ?.let { runCatching { libraryItems(it) }.getOrNull() }
+        return newest(authKey, emptyList(), cached.orEmpty()).takeIf { cached != null || it.isNotEmpty() }
+    }
 
     private fun libraryBody(authKey: String, ids: List<String>) = JSONObject().put("authKey", authKey)
         .put("collection", "libraryItem").put("ids", JSONArray(ids)).put("all", ids.isEmpty()).toString()
@@ -90,6 +102,7 @@ object Stremio {
         return (0 until list.length()).map { list.getJSONObject(it) }
     }
 
+    @Synchronized
     fun saveLibrary(authKey: String, items: List<JSONObject>) {
         items.forEach { saving["$authKey/${it.optString("_id")}"] = it }
         val body = JSONObject().put("authKey", authKey).put("collection", "libraryItem").put("changes", JSONArray(items))
@@ -98,6 +111,39 @@ object Stremio {
             items.forEach { saving.remove("$authKey/${it.optString("_id")}", it) }
             throw error
         }
+    }
+
+    @Synchronized
+    internal fun editLibrary(authKey: String, id: String, fallback: JSONObject, change: (JSONObject) -> Unit): JSONObject {
+        val entry = library(authKey, listOf(id)).firstOrNull()?.let { JSONObject(it.toString()) } ?: fallback
+        change(entry)
+        saveLibrary(authKey, listOf(entry))
+        return entry
+    }
+
+    @Synchronized
+    internal fun syncProgress(authKey: String) {
+        val pending = ProgressSaves.pending(authKey)
+        if (pending.isEmpty()) return
+        val items = pending.values.map(::JSONObject)
+        val remote = readLibrary(authKey, items.map { it.getString("_id") }).associateBy { it.getString("_id") }
+        val changes = items.mapNotNull { item ->
+            val id = item.getString("_id")
+            val saved = remote[id]
+            if (newerProgress(item, saved) && newerProgress(item, saving["$authKey/$id"])) applyProgress(item, saved) else null
+        }
+        if (changes.isNotEmpty()) saveLibrary(authKey, changes)
+        val body = libraryBody(authKey, emptyList())
+        val cached = Http.savedAnswer(API + "datastoreGet", body)?.let { runCatching { libraryItems(it) }.getOrNull() }
+        if (cached != null) {
+            val latest = cached.associateByTo(linkedMapOf()) { it.getString("_id") }
+            (remote.values + changes).forEach { item ->
+                val id = item.getString("_id")
+                if (newerProgress(item, latest[id])) latest[id] = item
+            }
+            Http.keep(API + "datastoreGet", body, JSONObject().put("result", JSONArray(latest.values)).toString())
+        }
+        ProgressSaves.complete(pending)
     }
 
     /** The account behind a sign-in: each sign-in has its own auth key, so two keys can be the same account. */

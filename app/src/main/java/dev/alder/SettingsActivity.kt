@@ -32,6 +32,7 @@ object Settings {
             if (tag.isEmpty()) android.os.LocaleList.getEmptyLocaleList() else android.os.LocaleList.forLanguageTags(tag)
     }
     fun maxHeight(c: Context) = prefs(c).getInt("maxHeight", 0) // 0: no limit
+    fun displayHeight(c: Context) = prefs(c).getInt("displayHeight", 0) // 0: auto
     fun maxSizeGb(c: Context) = prefs(c).getInt("maxSizeGb", 0) // 0: no limit
     /** "": as the addon orders them, "dv" or "hdr10": that first, "off": plain releases only. */
     fun hdrPref(c: Context): String {
@@ -65,14 +66,33 @@ object Settings {
         prefs(c).edit().putStringSet(profileKey(c, "hiddenRows"), current).apply()
     }
     fun startTab(c: Context) = prefs(c).getString(profileKey(c, "startTab"), "home").orEmpty()
-    fun showMovies(c: Context) = prefs(c).getBoolean(profileKey(c, "showMovies"), true)
-    fun showShows(c: Context) = prefs(c).getBoolean(profileKey(c, "showShows"), true)
-    fun showLive(c: Context) = prefs(c).getBoolean(profileKey(c, "showLive"), true)
+    /** Whether a tab after Home shows in the top bar, by its id in [tabsFor]; hiding an add-on's tab keeps the add-on. */
+    fun tabShown(c: Context, id: String) = prefs(c).getBoolean(profileKey(c, tabKey(id)), true)
+    fun setTabShown(c: Context, id: String, shown: Boolean) = prefs(c).edit().putBoolean(profileKey(c, tabKey(id)), shown).apply()
+    // Movies, Shows and Live keep the keys of the switches they had before Settings › Tabs, so those choices carry over.
+    private fun tabKey(id: String) = when (id) {
+        "movies" -> "showMovies"
+        "shows" -> "showShows"
+        "live" -> "showLive"
+        "library" -> "showLibrary"
+        else -> "showTab:" + id.removePrefix("type:")
+    }
+    /** The tabs after Home in this profile's order ([orderTabs] fills in the ones it never placed). */
+    fun tabOrder(c: Context): List<String> =
+        runCatching { org.json.JSONArray(prefs(c).getString(profileKey(c, "tabOrder"), "[]")).strings() }.getOrDefault(emptyList())
+    fun setTabOrder(c: Context, ids: List<String>) = prefs(c).edit().putString(profileKey(c, "tabOrder"), org.json.JSONArray(ids).toString()).apply()
     fun featuredHome(c: Context) = prefs(c).getBoolean(profileKey(c, "featuredHome"), false)
+    /** "imdb", "letterboxd" or "both"; Letterboxd needs [mdblistKey] and covers films only. */
+    fun ratings(c: Context) = prefs(c).getString("ratings", "imdb").orEmpty().ifEmpty { "imdb" }
+    fun mdblistKey(c: Context) = prefs(c).getString("mdblistKey", "").orEmpty()
+    fun setMdblistKey(c: Context, key: String) = prefs(c).edit().putString("mdblistKey", key.trim()).apply()
+    /** Letterboxd is asked for only when it can show: a film, a key, and a pick that includes it. */
+    fun wantsLetterboxd(c: Context, type: String, id: String) =
+        type == "movie" && id.startsWith("tt") && ratings(c) != "imdb" && mdblistKey(c).isNotEmpty()
     /** A removed profile's taste goes with it, so a new profile in its place starts with none. */
     fun forget(c: Context, profileId: String) = prefs(c).edit().apply {
-        listOf("release", "dub", "audioLang", "subLang", "hidden", "blurThumbnails", "hiddenRows", "startTab", "showMovies", "showShows", "showLive", "featuredHome", "recentSubLangs", "recentAudioLangs").forEach { remove("$it@$profileId") }
-        prefs(c).all.keys.filter { it.startsWith("title:") && it.endsWith("@$profileId") }.forEach(::remove)
+        listOf("release", "dub", "audioLang", "subLang", "hidden", "blurThumbnails", "hiddenRows", "startTab", "showMovies", "showShows", "showLive", "showLibrary", "tabOrder", "featuredHome", "recentSubLangs", "recentAudioLangs").forEach { remove("$it@$profileId") }
+        prefs(c).all.keys.filter { (it.startsWith("title:") || it.startsWith("showTab:")) && it.endsWith("@$profileId") }.forEach(::remove)
     }.apply()
 
     /**
@@ -98,8 +118,14 @@ object Settings {
         prefs(c).edit().putString(key, json.toString()).apply()
     }
     fun alwaysList(c: Context) = prefs(c).getBoolean("alwaysList", false)
+    /** Settings › Source list: true shows each source as its add-on wrote it, in a wider list. */
+    fun addonText(c: Context) = prefs(c).getBoolean("addonText", false)
     fun matchFrameRate(c: Context) = prefs(c).getBoolean("matchFrameRate", true)
-    fun passthrough(c: Context) = prefs(c).getBoolean("passthrough", false)
+    fun decodeAudio(c: Context) = prefs(c).getBoolean("decodeAudio", false)
+    /** Settings › Text and poster size, for this TV: 1 is the House Lights size, more makes every screen bigger. */
+    fun uiScale(c: Context) = prefs(c).getInt("uiScale", 100).coerceIn(100, 115) / 100f
+    /** Settings › Video player: null plays in Alder, else the package of the video app each source goes to. */
+    fun externalPlayer(c: Context) = prefs(c).getString("videoPlayer", "").orEmpty().ifEmpty { null }
     fun clearDialogue(c: Context) = prefs(c).getBoolean("clearDialogue", false)
     fun setClearDialogue(c: Context, on: Boolean) = prefs(c).edit().putBoolean("clearDialogue", on).apply()
     /** "on", "foreign" (only when audio differs or forced), "off". Migrates old Boolean "subtitles". */
@@ -126,6 +152,9 @@ object Settings {
     fun subtitleSize(c: Context) = prefs(c).getInt("subSize", 100) // percent of Media3's default size
     fun subtitleColorName(c: Context): String = prefs(c).getString("subColor", "white").orEmpty().ifEmpty { "white" }
     fun subtitleColor(c: Context) = subtitleColorValue(subtitleColorName(c))
+    /** The player's picture: "fit" (whole picture, bars), "zoom" (fills the screen, crops) or "stretch". */
+    fun pictureFit(c: Context) = prefs(c).getString("pictureFit", "fit").orEmpty().ifEmpty { "fit" }
+    fun setPictureFit(c: Context, fit: String) = prefs(c).edit().putString("pictureFit", fit).apply()
     fun subtitleBackground(c: Context) = prefs(c).getBoolean("subBackground", true)
     fun setSubtitleSize(c: Context, size: Int) = prefs(c).edit().putInt("subSize", size).apply()
     fun setSubtitleColor(c: Context, color: String) = prefs(c).edit().putString("subColor", color).apply()
@@ -156,6 +185,7 @@ object Settings {
 
 /** ARGB color for subtitle text from a preference name. */
 fun subtitleColorValue(name: String): Int = when (name.trim().lowercase()) {
+    "gray" -> 0xFFBFBFBF.toInt()
     "yellow" -> 0xFFFFE600.toInt()
     "cyan" -> 0xFF00FFFF.toInt()
     "cream" -> 0xFFFFF5C0.toInt()
@@ -241,6 +271,11 @@ class SettingsActivity : Screen() {
     private val streaming by lazy { listOf(
         Choice("alwaysList", getString(R.string.play_press), getString(R.string.play_press_hint),
             listOf(false to getString(R.string.play_best_source), true to getString(R.string.play_show_sources))),
+        Choice("addonText", getString(R.string.source_list), getString(R.string.source_list_hint),
+            listOf(false to getString(R.string.source_list_clean), true to getString(R.string.source_list_addon))),
+        // Alder, then each video app on this TV by its own name.
+        Choice("videoPlayer", getString(R.string.video_player), getString(R.string.video_player_hint),
+            listOf("" to getString(R.string.video_player_alder)) + ExternalPlayer.installed(this)),
         Choice("maxHeight", getString(R.string.max_quality), getString(R.string.max_quality_hint),
             listOf(0 to getString(R.string.no_limit), 2160 to "4K", 1080 to "1080p", 720 to "720p")),
         Choice("maxSizeGb", getString(R.string.max_size), getString(R.string.max_size_hint),
@@ -250,11 +285,16 @@ class SettingsActivity : Screen() {
                 "encode" to getString(R.string.release_encode), "web" to getString(R.string.release_web)), true),
     ) }
     private val pictureAndSound by lazy { listOf(
+        Choice("displayHeight", getString(R.string.display_resolution), getString(R.string.display_resolution_hint),
+            listOf(0 to getString(R.string.streams_auto), 1080 to "1080p", 2160 to "4K")),
+        Choice("uiScale", getString(R.string.ui_size), getString(R.string.ui_size_hint),
+            // ponytail: two steps; 130% pushed Home's title logo into the top bar on a 1080p TV.
+            listOf(100 to getString(R.string.ui_size_normal), 115 to getString(R.string.size_large))),
         Choice("hdrPref", getString(R.string.hdr_choice), getString(R.string.hdr_choice_hint),
             listOf("" to on, "dv" to getString(R.string.hdr_dv_first), "hdr10" to getString(R.string.hdr_hdr10_first), "off" to off)),
         Choice("matchFrameRate", getString(R.string.frame_rate), getString(R.string.frame_rate_hint), onOff()),
-        Choice("passthrough", getString(R.string.audio_output), getString(R.string.audio_output_hint),
-            listOf(false to getString(R.string.audio_tv_speakers), true to getString(R.string.audio_receiver))),
+        Choice("decodeAudio", getString(R.string.audio_output), getString(R.string.audio_output_hint),
+            listOf(false to getString(R.string.streams_auto), true to "PCM")),
         Choice("clearDialogue", getString(R.string.clear_dialogue), getString(R.string.clear_dialogue_setting_hint),
             listOf(false to off, true to on)),
     ) }
@@ -272,7 +312,8 @@ class SettingsActivity : Screen() {
             listOf(100 to getString(R.string.size_medium), 130 to getString(R.string.size_large),
                 160 to getString(R.string.size_extra_large), 80 to getString(R.string.size_small))),
         Choice("subColor", getString(R.string.subtitle_color), getString(R.string.subtitle_color_hint),
-            listOf("white" to getString(R.string.color_white), "yellow" to getString(R.string.color_yellow),
+            listOf("white" to getString(R.string.color_white), "gray" to getString(R.string.color_gray),
+                "yellow" to getString(R.string.color_yellow),
                 "cyan" to getString(R.string.color_cyan), "cream" to getString(R.string.color_cream),
                 "warm_white" to getString(R.string.color_warm_white))),
         Choice("subBackground", getString(R.string.subtitle_background), getString(R.string.subtitle_background_hint), onOff()),
@@ -292,6 +333,7 @@ class SettingsActivity : Screen() {
     private val choiceRows = mutableSetOf<View>()
     private val refresh = mutableListOf<() -> Unit>()
     private var selectedGroup: Group? = null
+    private var reopenGroup: Group? = null
     private var firstDetail: View? = null
     private var addonValue: TextView? = null
     private val prefs by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
@@ -340,10 +382,19 @@ class SettingsActivity : Screen() {
 
         detailTitle = text("", BODY, bold = true).apply { setPadding(dp(12), 0, 0, 0) }
         detailRows = column(Gravity.START)
-        rowsScroll = ScrollView(this).apply {
+        // A long group (Profile) scrolls in its own space: drawn past it, rows ran over the group's title and pushed the
+        // help off the screen. The padding keeps room for the focused row's glow inside that space.
+        val rowsMax = dp((height - 210).toInt())
+        rowsScroll = object : ScrollView(this) {
+            override fun onMeasure(widthSpec: Int, heightSpec: Int) =
+                super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(rowsMax, MeasureSpec.AT_MOST))
+        }.apply {
             isVerticalScrollBarEnabled = false
-            clipChildren = false
             clipToPadding = false
+            setPadding(dp(12), dp(6), dp(12), dp(12))
+            // Its parent lets children draw past it (the glow), so the frame clips the rows itself.
+            outlineProvider = android.view.ViewOutlineProvider.BOUNDS
+            clipToOutline = true
             addView(detailRows)
         }
         hint = text("", SMALL, color = TEXT_2).onArt().apply { setPadding(dp(12), 0, dp(20), 0) }
@@ -351,8 +402,8 @@ class SettingsActivity : Screen() {
         val detail = column(Gravity.START).apply {
             clipChildren = false
             addView(detailTitle, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(3) })
-            addView(rowsScroll, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
-            addView(hint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) })
+            addView(rowsScroll, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4); marginStart = -dp(12); marginEnd = -dp(12) })
+            addView(hint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
         }
         root.addView(detail, FrameLayout.LayoutParams(dp((width - 328).toInt()), dp((height - 110).toInt()), Gravity.TOP or Gravity.START).apply {
             leftMargin = dp(280); topMargin = dp(88)
@@ -360,8 +411,19 @@ class SettingsActivity : Screen() {
         window.setBackgroundDrawable(null)
         setContentView(root)
         profileName.text = Profiles.active(this)?.name?.let { getString(R.string.settings_profile_name, it) } ?: ""
-        showGroup(Group.STREAMS)
-        groupViews[Group.STREAMS]?.post { groupViews[Group.STREAMS]?.requestFocus() }
+        // Rebuilt for a new Text and poster size: back on the same page, on the row that changed it.
+        val reopened = savedInstanceState?.getString("group")?.let { name -> Group.entries.firstOrNull { it.name == name } }
+        val start = reopened ?: Group.STREAMS
+        showGroup(start)
+        // Now, not posted: otherwise Android gives first focus to the Streams button, and focus on a page button opens it.
+        groupViews[start]?.requestFocus()
+        if (reopened != null) detailRows.post { firstDetail?.requestFocus() }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // The page the size was changed on: focus moving during the rebuild can select another one first.
+        (reopenGroup ?: selectedGroup)?.let { outState.putString("group", it.name) }
     }
 
     override fun onResume() {
@@ -533,13 +595,26 @@ class SettingsActivity : Screen() {
                 choiceRow(Choice("startTab", getString(R.string.default_tab), getString(R.string.default_tab_hint),
                     listOf("home" to getString(R.string.tab_home), "movies" to getString(R.string.tab_movies),
                         "shows" to getString(R.string.tab_shows), "library" to getString(R.string.tab_my_list)), perProfile = true))
-                choiceRow(Choice("showMovies", getString(R.string.movies_tab), getString(R.string.movies_tab_hint), onOff(), perProfile = true))
-                choiceRow(Choice("showShows", getString(R.string.shows_tab), getString(R.string.shows_tab_hint), onOff(), perProfile = true))
-                choiceRow(Choice("showLive", getString(R.string.live_tab), getString(R.string.live_tab_hint), onOff(), perProfile = true))
+                lateinit var tabsValue: TextView
+                tabsValue = actionRow(getString(R.string.tabs), "…", getString(R.string.tabs_hint), perProfile = true) {
+                    tabsMenu { tabs -> tabsValue.text = tabsSummary(tabs) + "  ›" }
+                }
+                withTabs { tabs -> tabsValue.text = tabsSummary(tabs) + "  ›" }
                 choiceRow(Choice("featuredHome", getString(R.string.featured_home), getString(R.string.featured_home_hint),
                     listOf(false to off, true to on), perProfile = true))
                 choiceRow(Choice("blurThumbnails", getString(R.string.blur_thumbnails), getString(R.string.blur_thumbnails_hint),
                     listOf(false to off, true to on), perProfile = true))
+                choiceRow(Choice("ratings", getString(R.string.ratings_source), getString(R.string.ratings_source_hint),
+                    listOf("imdb" to "IMDb", "letterboxd" to LETTERBOXD, "both" to getString(R.string.ratings_both))))
+                lateinit var keyValue: TextView
+                fun keyState() = getString(if (Settings.mdblistKey(this).isEmpty()) R.string.key_not_set else R.string.key_set)
+                keyValue = actionRow(getString(R.string.mdblist_key), keyState(), getString(R.string.mdblist_key_hint)) {
+                    askOnPhone(R.string.mdblist_key, initial = Settings.mdblistKey(this)) { typed ->
+                        Settings.setMdblistKey(this, typed)
+                        forgetLetterboxd()
+                        keyValue.text = keyState() + "  ›"
+                    }
+                }
             }
             Group.LANGUAGE -> appLanguageRow()
             Group.STORAGE -> actionRow(getString(R.string.clear_storage), "", getString(R.string.clear_storage_hint)) {
@@ -556,6 +631,10 @@ class SettingsActivity : Screen() {
                     choose("Alder", listOf(getString(R.string.action_ok)), getString(R.string.about_desc)) {}
                 }
                 actionRow(getString(R.string.whats_new), getString(R.string.version, Updates.mine(this)), getString(R.string.whats_new_hint)) { whatsNew() }
+                // Only while a crash waits to be sent: answered "No" on Home, or the send failed.
+                if (Crashes.sendable(this)) actionRow(getString(R.string.report_send), "", getString(R.string.report_send_hint)) {
+                    sendReport { showGroup(Group.ABOUT) }
+                }
                 var found: Updates.Release? = null
                 val value = actionRow(getString(R.string.updates), getString(R.string.updates_checking), getString(R.string.updates_hint)) {
                     found?.let(::installUpdate) ?: showGroup(Group.ABOUT)
@@ -624,6 +703,53 @@ class SettingsActivity : Screen() {
         }
     }
 
+    /** This profile's tabs after Home, in its order; its add-ons say whether Live and their own tabs (Trakt…) exist. */
+    private fun withTabs(then: (List<String>) -> Unit) {
+        val key = authKey ?: return
+        background({
+            val addons = runCatching { Stremio.addons(key) }.getOrElse { Stremio.savedAddons(key).orEmpty() }
+            tabsFor(addons.flatMap { a -> a.catalogs.map { it.type } })
+        }) { result ->
+            then(orderTabs(Settings.tabOrder(this), result.getOrElse { tabsFor(emptyList()) }))
+        }
+    }
+
+    private fun tabsSummary(tabs: List<String>) = getString(R.string.tabs_count, tabs.count { Settings.tabShown(this, it) }, tabs.size)
+
+    private fun tabName(id: String) = when (id) {
+        "shows" -> getString(R.string.tab_shows)
+        "movies" -> getString(R.string.tab_movies)
+        "live" -> getString(R.string.tab_live)
+        "library" -> getString(R.string.tab_my_list)
+        else -> typeTabName(this, id.removePrefix("type:"))
+    }
+
+    /**
+     * Settings › Tabs: the tabs after Home, left to right as in the top bar. OK on one shows or hides it, or moves it a
+     * place; the list then opens again on that tab, so moving it several places is OK, OK, OK.
+     */
+    private fun tabsMenu(focus: Int = 0, done: (List<String>) -> Unit): Unit = withTabs { tabs ->
+        choose(getString(R.string.tabs), tabs.map { "${tabName(it)}  ·  ${if (Settings.tabShown(this, it)) on else off}" },
+            getString(R.string.tabs_desc), focus = focus.coerceIn(0, tabs.lastIndex)) { i ->
+            val id = tabs[i]
+            val shown = Settings.tabShown(this, id)
+            fun move(to: Int) {
+                val reordered = tabs.toMutableList().apply { add(to, removeAt(i)) }
+                Settings.setTabOrder(this, saveTabOrder(Settings.tabOrder(this), reordered))
+            }
+            val actions = listOfNotNull(
+                getString(if (shown) R.string.tab_hide else R.string.tab_show) to { Settings.setTabShown(this, id, !shown); i },
+                if (i > 0) getString(R.string.tab_move_left) to { move(i - 1); i - 1 } else null,
+                if (i < tabs.lastIndex) getString(R.string.tab_move_right) to { move(i + 1); i + 1 } else null,
+            )
+            choose(tabName(id), actions.map { it.first }) { a ->
+                val at = actions[a].second()
+                withTabs(done)
+                tabsMenu(at, done)
+            }
+        }
+    }
+
     /** The catalog rows hidden from home, movies or shows; OK on one puts it back. */
     private fun unhideRowsMenu(done: () -> Unit) {
         val all = Settings.hiddenRows(this).toList().sorted()
@@ -634,9 +760,9 @@ class SettingsActivity : Screen() {
         }
     }
 
-    private fun actionRow(label: String, value: String, help: String, click: () -> Unit): TextView {
+    private fun actionRow(label: String, value: String, help: String, perProfile: Boolean = false, click: () -> Unit): TextView {
         val display = text(if (value.isEmpty()) "›" else "$value  ›", BODY, color = TEXT_2)
-        settingRow(label, display, help, focus = { display.setTextColor(if (it) TUNGSTEN else TEXT_2) }, click = click)
+        settingRow(label, display, help, perProfile, focus = { display.setTextColor(if (it) TUNGSTEN else TEXT_2) }, click = click)
         return display
     }
 
@@ -652,7 +778,7 @@ class SettingsActivity : Screen() {
             is String -> putString(key(c), value)
             else -> putInt(key(c), value as Int)
         }
-    }.apply()
+    }.apply().also { if (c.key == "uiScale") { reopenGroup = selectedGroup; main.post { recreate() } } } // the new size shows at once
     private fun choice(key: String) = (streaming + pictureAndSound).first { it.key == key }
 
     private fun choiceRow(c: Choice) {
@@ -773,7 +899,7 @@ class SettingsActivity : Screen() {
 
     private companion object {
         /** The languages Alder has words for, besides English; res/xml/locales_config.xml lists the same. */
-        val APP_LANGUAGES = listOf("en", "es", "pt-BR", "fr", "de", "it", "hi")
+        val APP_LANGUAGES = listOf("en", "es", "pt-BR", "fr", "de", "it", "hi", "ar")
         val PRESETS = listOf(
             R.string.preset_addon_order to mapOf("release" to "", "hdrPref" to "", "maxHeight" to 0, "maxSizeGb" to 0),
             R.string.preset_best_picture to mapOf("release" to "remux", "hdrPref" to "dv", "maxHeight" to 0, "maxSizeGb" to 0),

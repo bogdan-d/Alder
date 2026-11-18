@@ -29,6 +29,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 /**
@@ -71,13 +72,21 @@ internal fun filmGlow(pixels: IntArray): Int {
     return (0x8C shl 24) or ((red * scale).toInt() shl 16) or ((green * scale).toInt() shl 8) or (blue * scale).toInt()
 }
 
+// Hardware (GPU) bitmaps came in Android 8. Before it Bitmap.Config.HARDWARE does not exist, and touching it crashed
+// Alder on Android 6 and 7, so older TVs keep pictures in ordinary memory.
+internal val GPU_BITMAP: Bitmap.Config = if (android.os.Build.VERSION.SDK_INT >= 26) Bitmap.Config.HARDWARE else Bitmap.Config.ARGB_8888
+internal fun Bitmap.onGpu() = android.os.Build.VERSION.SDK_INT >= 26 && config == Bitmap.Config.HARDWARE
+/** This picture moved to GPU memory (Android 8+), the original recycled; older Android keeps it as it is. */
+internal fun Bitmap.toGpu(): Bitmap =
+    if (android.os.Build.VERSION.SDK_INT >= 26) copy(Bitmap.Config.HARDWARE, false).also { recycle() } else this
+
 /**
  * A [w] x [h] copy of [src]'s pixels, or null. Decoded art is often a hardware bitmap, which can't be read: scaling
  * keeps it hardware, so the small copy is moved to software before reading. Every pixel sample goes through here.
  */
 internal fun samplePixels(src: Bitmap, w: Int, h: Int): IntArray? = runCatching {
     val small = Bitmap.createScaledBitmap(src, w, h, true)
-    val soft = if (small.config == Bitmap.Config.HARDWARE) small.copy(Bitmap.Config.ARGB_8888, false) else small
+    val soft = if (small.onGpu()) small.copy(Bitmap.Config.ARGB_8888, false) else small
     IntArray(w * h).also { soft.getPixels(it, 0, w, 0, 0, w, h) }
         .also { if (small !== src) small.recycle(); if (soft !== small) soft.recycle() }
 }.getOrNull()
@@ -98,16 +107,26 @@ abstract class Screen : Activity() {
     /** The Stremio account of the profile in use. */
     protected val authKey: String? get() = Profiles.active(this)?.authKey
 
-    /** Settings › Language › App language, for TVs without Android 13's per-app language page (it applies it itself). */
+    /** The Settings › Text and poster size this screen was built with; a different one rebuilds it (see onResume). */
+    private var builtScale = 1f
+
+    /**
+     * Settings › Language › App language, for TVs without Android 13's per-app language page (it applies it itself),
+     * and Settings › Text and poster size: the screen's density grows, so text, posters, glass and spacing all grow
+     * together and keep the House Lights proportions (rows show fewer posters, each one bigger).
+     */
     override fun attachBaseContext(newBase: Context) {
-        if (android.os.Build.VERSION.SDK_INT >= 33) return super.attachBaseContext(newBase)
         val config = android.content.res.Configuration(newBase.resources.configuration)
-        val lang = Settings.appLanguage(newBase)
-        @Suppress("DEPRECATION") val locale = if (lang.isEmpty()) config.locale else java.util.Locale.forLanguageTag(lang)
-        java.util.Locale.setDefault(locale) // language names and dates follow it too
-        if (lang.isEmpty()) return super.attachBaseContext(newBase)
-        config.setLocale(locale)
-        super.attachBaseContext(newBase.createConfigurationContext(config))
+        var changed = false
+        if (android.os.Build.VERSION.SDK_INT < 33) {
+            val lang = Settings.appLanguage(newBase)
+            @Suppress("DEPRECATION") val locale = if (lang.isEmpty()) config.locale else java.util.Locale.forLanguageTag(lang)
+            java.util.Locale.setDefault(locale) // language names and dates follow it too
+            if (lang.isNotEmpty()) { config.setLocale(locale); changed = true }
+        }
+        builtScale = Settings.uiScale(newBase)
+        if (builtScale != 1f) { config.densityDpi = (config.densityDpi * builtScale).toInt(); changed = true }
+        super.attachBaseContext(if (changed) newBase.createConfigurationContext(config) else newBase)
     }
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
@@ -154,14 +173,15 @@ abstract class Screen : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (Settings.uiScale(this) != builtScale) return recreate() // the size changed while this screen was behind
         val release = pendingInstall ?: return
         pendingInstall = null
         if (Updates.canInstall(this)) installUpdate(release)
     }
 
     /** Runs [work] off the main thread and hands its result back on it, unless the screen is gone. */
-    protected fun <T> background(work: () -> T, done: (Result<T>) -> Unit) {
-        pool.execute {
+    protected fun <T> background(work: () -> T, executor: Executor = pool, done: (Result<T>) -> Unit) {
+        executor.execute {
             val result = runCatching(work)
             main.post { if (!isDestroyed) done(result) }
         }
@@ -216,7 +236,7 @@ abstract class Screen : Activity() {
 
     /** The left shade is for text over bare art; a screen that puts its text on glass can lift it off the art. */
     protected fun leftShade(on: Boolean) {
-        windowShade?.animate()?.alpha(if (on) 1f else 0f)?.setDuration(260)?.start()
+        windowShade?.enter()?.alpha(if (on) 1f else 0f)?.start()
     }
 
     private fun updateWindowShade() {
@@ -382,7 +402,26 @@ abstract class Screen : Activity() {
         if (on) generateSequence(parent as? android.view.ViewGroup) { it.parent as? android.view.ViewGroup }
             .takeWhile { it !is android.widget.ScrollView && it !is android.widget.HorizontalScrollView && it !is android.widget.AbsListView }
             .forEach { it.clipChildren = false; it.clipToPadding = false }
-        return animate().scaleX(if (on) by else 1f).scaleY(if (on) by else 1f).setDuration(150)
+        return animate().scaleX(if (on) by else 1f).scaleY(if (on) by else 1f).setDuration(FOCUS_MS)
+            .setInterpolator(if (on) SETTLE else EASE_OUT)
+    }
+
+    /** Something arrives (a panel, an overlay, a line of text): [ENTER_MS], easing out. Chain the target values. */
+    protected fun View.enter(ms: Long = ENTER_MS): android.view.ViewPropertyAnimator =
+        animate().setDuration(ms).setInterpolator(EASE_OUT)
+
+    /** Something leaves: [QUICK_MS], easing in, so it gets out of the way faster than it came. */
+    protected fun View.exit(ms: Long = QUICK_MS): android.view.ViewPropertyAnimator =
+        animate().setDuration(ms).setInterpolator(EASE_IN)
+
+    /** A wrong PIN: a short side-to-side shake. */
+    protected fun View.shake() {
+        val d = dp(16).toFloat()
+        animate().translationX(d).setDuration(FOCUS_MS / 3).setInterpolator(EASE_OUT).withEndAction {
+            animate().translationX(-d).setDuration(FOCUS_MS / 2).withEndAction {
+                animate().translationX(0f).setDuration(FOCUS_MS / 3).start()
+            }.start()
+        }.start()
     }
 
     protected fun chip(words: Int, selected: Boolean = false) = chip(getString(words), selected)
@@ -406,9 +445,9 @@ abstract class Screen : Activity() {
         }
     }
 
-    protected fun caption(value: String) = text(value, SMALL).apply {
+    protected fun caption(value: String, keepPrevious: Boolean = true) = text(value, SMALL).apply {
         setPadding(dp(12), dp(6), dp(12), dp(6))
-        background = glassOver(this, 16)
+        background = glassOver(this, 16, keepPrevious = keepPrevious)
     }
 
     /** "[OK] Play / pause": the key in a small box, then what it does. */
@@ -442,12 +481,105 @@ abstract class Screen : Activity() {
         addView(text("Alder", size, serif = true).onArt(), wrap().apply { marginStart = dp(4) })
     }
 
-    /** The IMDb tag beside a rating, as tall as the letters. */
-    protected fun imdbTag() = text("IMDb", SMALL, bold = true, color = BASE).apply {
+    /** The source's tag beside a rating ("IMDb", "Letterboxd"), as tall as the letters. */
+    protected fun ratingTag(source: String = "IMDb", sp: Float = SMALL) = text(source, sp, bold = true, color = BASE).apply {
         background = rounded(TUNGSTEN, 3)
         includeFontPadding = false
         setLineSpacing(0f, 1f)
         setPadding(dp(4), dp(1), dp(4), dp(1))
+    }
+
+    /** [ratings] as tag and number pairs, "IMDb 7.9  Letterboxd 3.9", into [row] after what it already holds. */
+    protected fun addRatings(row: LinearLayout, ratings: List<Pair<String, String>>, tagSp: Float = SMALL, firstGap: Int = 10) =
+        ratings.forEachIndexed { i, (source, value) ->
+            row.addView(ratingTag(source, tagSp), wrap().apply { marginStart = dp(if (i == 0) firstGap else 10) })
+            row.addView(text(value, SMALL, color = TEXT_2).onArt(), wrap().apply { marginStart = dp(6) })
+        }
+
+    /** One line of typing (an addon address, an API key) on glass; OK on the keyboard or the button hands it over, trimmed. */
+    protected fun askText(title: Int, action: Int, hint: String? = null, initial: String = "", done: (String) -> Unit) {
+        val dialog = android.app.Dialog(this).apply { requestWindowFeature(android.view.Window.FEATURE_NO_TITLE) }
+        val field = android.widget.EditText(this).apply {
+            this.hint = hint
+            setHintTextColor(TEXT_3)
+            setTextColor(TEXT)
+            textSize = BODY
+            setSingleLine()
+            setText(initial)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            background = glass(8)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        fun finish() { val typed = field.text.toString().trim(); dialog.dismiss(); done(typed) }
+        dialog.setContentView(column(Gravity.START).apply {
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            background = glassOver(this, 14)
+            addView(text(title, BODY, bold = true))
+            addView(field, LinearLayout.LayoutParams(-1, dp(38)).apply { topMargin = dp(14) })
+            addView(LinearLayout(context).apply {
+                gravity = Gravity.END
+                addView(chip(R.string.action_cancel).apply { setOnClickListener { dialog.dismiss() } })
+                addView(pill(action).apply { setOnClickListener { finish() } },
+                    LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        })
+        dialog.show()
+        dialog.window?.apply { setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0)); setLayout(dp(400), -2); setDimAmount(0.6f) }
+        field.setOnEditorActionListener { _, _, _ -> finish(); true }
+        field.requestFocus()
+    }
+
+    /**
+     * Text too long for a remote (an API key), sent from a phone: a QR opens a one-box page served by the TV itself on
+     * the home network (PhoneEntry). "Type it instead" falls back to [askText], as does a TV with no network address.
+     */
+    protected fun askOnPhone(title: Int, initial: String = "", done: (String) -> Unit) {
+        val dialog = android.app.Dialog(this).apply { requestWindowFeature(android.view.Window.FEATURE_NO_TITLE) }
+        val entry = runCatching {
+            PhoneEntry({ saved ->
+                phoneEntryPage(getString(title), getString(R.string.phone_page_label), getString(R.string.phone_page_send),
+                    if (saved) getString(R.string.phone_page_saved) else null)
+            }) { typed -> main.post { if (dialog.isShowing) dialog.dismiss(); done(typed) } }
+        }.getOrNull()
+        val url = entry?.url ?: run { entry?.close(); return askText(title, R.string.action_ok, initial = initial, done = done) }
+        val back = currentFocus // the row that opened it, so the remote stays there when the phone sends the text
+        dialog.setOnDismissListener { entry.close(); back?.requestFocus() }
+        val typeInstead = pill(R.string.phone_entry_type).apply {
+            setOnClickListener { dialog.dismiss(); askText(title, R.string.action_ok, initial = initial, done = done) }
+        }
+        dialog.setContentView(column(Gravity.CENTER,
+            text(title, BODY, bold = true),
+            text(R.string.phone_entry_scan, SMALL, color = TEXT_2).apply { gravity = Gravity.CENTER }.marginTop(8),
+            ImageView(this).apply {
+                setImageBitmap(qrBitmap(url, dp(180)))
+                background = rounded(TEXT, 12)
+                setPadding(dp(6), dp(6), dp(6), dp(6))
+            }.marginTop(16),
+            text(url, SMALL, color = TEXT_3).marginTop(10),
+            LinearLayout(this).apply {
+                gravity = Gravity.CENTER
+                addView(chip(R.string.action_cancel).apply { setOnClickListener { dialog.dismiss() } })
+                addView(typeInstead, LinearLayout.LayoutParams(-2, -2).apply { marginStart = dp(10) })
+            }.marginTop(16),
+        ).apply {
+            setPadding(dp(24), dp(22), dp(24), dp(20))
+            background = glassOver(this, 14)
+        })
+        dialog.show()
+        dialog.window?.apply { setBackgroundDrawable(android.graphics.drawable.ColorDrawable(0)); setLayout(dp(420), -2); setDimAmount(0.6f) }
+        typeInstead.requestFocus()
+    }
+
+    /**
+     * Sends the saved crash (Crashes.send) and says whether it went. Home asks after a crash; Settings › About offers it
+     * until it is sent. Off the main thread: the worker files a GitHub issue, which takes a second or two.
+     */
+    protected fun sendReport(done: () -> Unit = {}) = background({ Crashes.send(applicationContext) }) { result ->
+        if (isFinishing) return@background
+        choose(getString(if (result.isSuccess) R.string.report_sent_title else R.string.report_failed_title),
+            listOf(getString(R.string.action_ok)),
+            getString(if (result.isSuccess) R.string.report_sent_desc else R.string.report_failed_desc)) {}
+        done()
     }
 
     /** Null animates loading; for countdowns set progress to fraction × max as time changes. */
@@ -524,11 +656,11 @@ abstract class Screen : Activity() {
         else -> null
     }
 
-    protected fun View.lift(on: Boolean, radiusDp: Int = 6) {
-        foreground = if (on) GradientDrawable().apply {
+    protected fun View.lift(on: Boolean, radiusDp: Int = 6, rim: Boolean = true) {
+        foreground = if (on && rim) GradientDrawable().apply {
             setColor(Color.TRANSPARENT)
             cornerRadius = dp(radiusDp).toFloat()
-            setStroke(dp(1), TUNGSTEN_RIM) // a hairline: the glow and the lift carry focus
+            setStroke(dp(1), TUNGSTEN_RIM)
         } else null
         if (on && android.os.Build.VERSION.SDK_INT >= 28) {
             val poster = posterBitmap(this)
@@ -541,13 +673,14 @@ abstract class Screen : Activity() {
             }
         }
         grow(on)
-            .translationZ(if (on) dp(CARD_LIFT).toFloat() else 0f).setDuration(150).start()
+            .translationZ(if (on) dp(CARD_LIFT).toFloat() else 0f).start()
     }
 
     /** The screen's art, behind its glass: what [glassOver] frosts. Screens with art behind them name it. */
     protected open val backdrop: ImageView? get() = null
 
     private var frostSource: Bitmap? = null
+    private var frostFor: Bitmap? = null
     private var frostBitmap: Bitmap? = null
     private val frostHosts = mutableListOf<View>()
 
@@ -557,11 +690,11 @@ abstract class Screen : Activity() {
      */
     /** [shade]: how much of the screen's own shade lies over the art there (0..1), so glass over a shaded part of the art
      *  is as dark as the art around it instead of a milky patch of the unshaded picture. */
-    protected fun glassOver(host: View, radiusDp: Int, shade: Float = 0f): Drawable {
+    protected fun glassOver(host: View, radiusDp: Int, shade: Float = 0f, keepPrevious: Boolean = true): Drawable {
         // No art to frost (Settings): the glass sits on the base colour, so a dialog doesn't show the rows under it.
         val behind = backdrop ?: return LayerDrawable(arrayOf(rounded(BASE, radiusDp), glass(radiusDp)))
         frostHosts += host
-        return Frost(host, behind, dp(radiusDp).toFloat(), shade)
+        return Frost(host, behind, dp(radiusDp).toFloat(), shade, keepPrevious)
     }
 
     /** The art behind changed: glass redraws with the new picture once it's blurred. */
@@ -571,17 +704,23 @@ abstract class Screen : Activity() {
     }
 
     /** The art blurred once per picture ([Images.frost]); the last one stays up while the next is made. */
-    private fun frosted(d: Drawable?): Bitmap? {
-        val src = (d as? BitmapDrawable)?.bitmap ?: return frostBitmap
+    private fun frosted(d: Drawable?, keepPrevious: Boolean): Bitmap? {
+        val src = (d as? BitmapDrawable)?.bitmap ?: return frostBitmap.takeIf { keepPrevious }
         if (src !== frostSource) {
             frostSource = src
-            background({ Images.frost(src, FROST_W) }) { r -> if (frostSource === src) { frostBitmap = r.getOrNull(); refrost() } }
+            background({ Images.frost(src, FROST_W) }) { r ->
+                if (frostSource === src) {
+                    frostBitmap = r.getOrNull()
+                    frostFor = src
+                    refrost()
+                }
+            }
         }
-        return frostBitmap
+        return frostBitmap.takeIf { keepPrevious || frostFor === src }
     }
 
     private inner class Frost(private val host: View, private val behind: ImageView, private val radius: Float,
-                              private val shade: Float = 0f) : Drawable() {
+                              private val shade: Float, private val keepPrevious: Boolean) : Drawable() {
         private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
         private val tint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = GLASS }
         private val edge = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = GLASS_EDGE; style = Paint.Style.STROKE; strokeWidth = dp(1).toFloat() }
@@ -594,7 +733,7 @@ abstract class Screen : Activity() {
             path.reset()
             path.addRoundRect(RectF(bounds), radius, radius, Path.Direction.CW)
             val d = behind.drawable
-            frosted(d)?.let { f ->
+            frosted(d, keepPrevious)?.let { f ->
                 canvas.save()
                 canvas.clipPath(path)
                 // The blurred art lines up with the sharp art behind: where the host sits on screen, through the same crop.
@@ -626,6 +765,16 @@ abstract class Screen : Activity() {
         setBackgroundColor(PROGRESS_TRACK)
         addView(View(context).apply { setBackgroundColor(color) }, LinearLayout.LayoutParams(0, -1, p))
         addView(View(context), LinearLayout.LayoutParams(0, -1, 1f - p))
+    }
+
+    protected fun timeLeft(duration: Long, position: Long): String? {
+        if (position <= 0 || duration <= position) return null
+        val minutes = (duration - position) / 60_000
+        return when {
+            minutes == 0L -> getString(R.string.time_left_under_minute)
+            minutes >= 60 -> getString(R.string.time_left_hours, minutes / 60, minutes % 60)
+            else -> getString(R.string.time_left_minutes, minutes)
+        }
     }
 
     protected fun isInside(v: View, parent: View): Boolean = generateSequence(v) { it.parent as? View }.any { it === parent }
@@ -897,9 +1046,15 @@ abstract class Screen : Activity() {
     }
 
     // House Lights' shared values. Screens keep their layout and content; the helpers above own component styling.
+    // Inter is a variable font. Android 6 and 7 have no Typeface.Builder to pick its weight (calling it crashed Alder at
+    // launch there), so they get Inter's default weight and a synthetic bold for semi-bold.
     private class Fonts(assets: android.content.res.AssetManager) {
-        val medium: Typeface = Typeface.Builder(assets, "fonts/inter.ttf").setFontVariationSettings("'wght' 500").setWeight(500).build()
-        val semiBold: Typeface = Typeface.Builder(assets, "fonts/inter.ttf").setFontVariationSettings("'wght' 600").setWeight(600).build()
+        val medium: Typeface = if (android.os.Build.VERSION.SDK_INT >= 26)
+            Typeface.Builder(assets, "fonts/inter.ttf").setFontVariationSettings("'wght' 500").setWeight(500).build()
+        else Typeface.createFromAsset(assets, "fonts/inter.ttf")
+        val semiBold: Typeface = if (android.os.Build.VERSION.SDK_INT >= 26)
+            Typeface.Builder(assets, "fonts/inter.ttf").setFontVariationSettings("'wght' 600").setWeight(600).build()
+        else Typeface.create(medium, Typeface.BOLD)
         val serif: Typeface = Typeface.createFromAsset(assets, "fonts/instrument_serif.ttf")
     }
 
@@ -919,6 +1074,23 @@ abstract class Screen : Activity() {
         const val CARD_GROW = 1.08f
         const val CHIP_GROW = 1.04f // a wide chip grown as much as a card filled the gap to its neighbour
         const val CARD_LIFT = 8
+
+        // Motion (design/DESIGN_SYSTEM.md "Motion"). Screens use these, never a number: things arrive easing out, leave
+        // faster easing in, and focus settles with a small overshoot. Only alpha and transforms move: this TV's GPU
+        // has ~4 ms a frame to spare (issue 17). Android's animation scale (and Remove animations) shortens all of them.
+        const val FOCUS_MS = 150L // focus moves, small state changes
+        const val QUICK_MS = 180L // something leaves
+        const val ENTER_MS = 240L // a panel, overlay or line arrives
+        const val PAGE_MS = 300L // a page's content changes; screens open and close
+        const val IDLE_MS = 400L // the UI dims or comes back
+        const val ART_MS = 600L // a backdrop crossfades
+        const val LIGHTS_MS = 800L // first art after launch: the lights rise
+        const val PUSH_IN_MS = 20_000L // the backdrop's slow push-in
+        const val PUSH_IN = 1.03f
+        const val ARRIVE = 1.04f // a title page's art starts this close and settles back to 1
+        val EASE_OUT: android.animation.TimeInterpolator = android.view.animation.DecelerateInterpolator(1.5f)
+        val EASE_IN: android.animation.TimeInterpolator = android.view.animation.AccelerateInterpolator(1.5f)
+        val SETTLE: android.animation.TimeInterpolator = android.view.animation.OvershootInterpolator(1.2f)
         // Spacing, everywhere rows of pictures appear: between cards, from a row's heading to its cards (plus room for
         // the focused card to grow), and above a heading, so each heading belongs to the row under it.
         const val CARD_GAP = 14

@@ -5,12 +5,15 @@ import android.hardware.display.DisplayManager
 import android.media.MediaCodecInfo.CodecProfileLevel
 import android.media.MediaCodecList
 import android.view.Display
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 
 /** What this TV can decode and show, checked once per launch (the codec list takes a few ms). */
-class Device private constructor(val hevc: Boolean, val av1: Boolean, val dolbyVision: Boolean, val hdr: Boolean, val height: Int) {
+class Device internal constructor(val hevc: Boolean, val av1: Boolean, val dolbyVision: Boolean, val hdr: Boolean, val height: Int) {
     companion object {
         @Volatile private var known: Device? = null
 
+        @androidx.annotation.OptIn(UnstableApi::class)
         fun of(context: Context): Device = known ?: run {
             val decoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder }
             val types = decoders.flatMap { it.supportedTypes.asList() }.map { it.lowercase() }.toSet()
@@ -23,9 +26,12 @@ class Device private constructor(val hevc: Boolean, val av1: Boolean, val dolbyV
             }
             val display = context.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
             @Suppress("DEPRECATION")
-            val hdr = display.hdrCapabilities?.supportedHdrTypes?.isNotEmpty() == true
-            // The biggest mode the TV offers, not the one in use: the launcher often runs at 1080p on a 4K panel.
-            val height = display.supportedModes.maxOf { minOf(it.physicalWidth, it.physicalHeight) }
+            val hdr = android.os.Build.VERSION.SDK_INT >= 24 && display.hdrCapabilities?.supportedHdrTypes?.isNotEmpty() == true
+            val modeSize = Util.getCurrentDisplayModeSize(context, display)
+            val height = maxOf(
+                minOf(modeSize.x, modeSize.y),
+                display.supportedModes.maxOfOrNull { minOf(it.physicalWidth, it.physicalHeight) } ?: 0
+            )
             Device("video/hevc" in types, "video/av01" in types, dv5, hdr, height)
                 .also { known = it }
         }
